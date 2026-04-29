@@ -1,0 +1,36 @@
+# macOS local metadata
+.DS_Store
+._*
+.AppleDouble
+.LSOverride
+
+# Build and release artifacts
+build/
+dist/
+DerivedData/
+*.app/
+*.dSYM/
+*.dSYM.zip
+*.ipa
+*.xcarchive/
+*.dmg
+
+# Xcode local user state
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.hmap
+.xcode.env.local
+
+# Swift Package Manager local state
+.build/
+.swiftpm/
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
