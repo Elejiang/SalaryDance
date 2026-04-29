@@ -24,6 +24,58 @@ enum MonthlySalaryCalculationMode: String, Codable, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+/// 补贴的发放口径。按日补贴直接进入日薪，按月补贴再决定是否平摊到日薪。
+enum SalarySubsidyType: String, Codable, CaseIterable, Identifiable {
+    case daily = "按日补贴"
+    case monthly = "按月补贴"
+
+    var id: String { rawValue }
+}
+
+/// 按月补贴的计入方式：只汇入月薪，或拆成每天收入参与实时累计。
+enum MonthlySubsidyApplicationMode: String, Codable, CaseIterable, Identifiable {
+    case addToMonthlySalary = "加到月薪"
+    case spreadToDailySalary = "平摊到每天"
+
+    var id: String { rawValue }
+}
+
+/// 按月补贴平摊到每天时使用的分母来源。
+enum MonthlySubsidyProrationMode: String, Codable, CaseIterable, Identifiable {
+    case salaryCycleTotalDays = "周期内总天数"
+    case fixedDays = "固定天数"
+    case salaryCycleWorkdays = "周期内工作日天数"
+
+    var id: String { rawValue }
+}
+
+/// 单条补贴配置。金额始终保存为非负数，按月补贴的固定平摊天数默认 21.75。
+struct SalarySubsidy: Codable, Equatable, Identifiable {
+    static let defaultFixedProrationDays = 21.75
+
+    var id: UUID = UUID()
+    var enabled: Bool = true
+    var name: String = "补贴名"
+    var type: SalarySubsidyType = .daily
+    var amount: Double = 0
+    var monthlyApplicationMode: MonthlySubsidyApplicationMode = .spreadToDailySalary
+    var monthlyProrationMode: MonthlySubsidyProrationMode = .fixedDays
+    var fixedProrationDays: Double = Self.defaultFixedProrationDays
+
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "补贴名" : trimmed
+    }
+
+    mutating func normalize(fixedDaysRange: ClosedRange<Double>) {
+        amount = amount.isFinite ? max(0, amount) : 0
+        fixedProrationDays = min(
+            fixedDaysRange.upperBound,
+            max(fixedDaysRange.lowerBound, fixedProrationDays.isFinite ? fixedProrationDays : Self.defaultFixedProrationDays)
+        )
+    }
+}
+
 /// 状态栏实时金额的数字变化效果。
 enum StatusBarSalaryAnimationStyle: String, Codable, CaseIterable, Identifiable {
     case rolling = "滚动"
@@ -126,6 +178,7 @@ struct TimeRange: Codable, Equatable {
 struct SalaryCyclePeriod: Equatable {
     let start: Date
     let endExclusive: Date
+    let totalDays: Int
     let paidWorkdays: Int
 
     var endInclusive: Date {
@@ -214,6 +267,7 @@ struct SalaryConfig: Codable, Equatable {
     var monthlySalaryCalculationMode: MonthlySalaryCalculationMode = .fixedAverage
     var fixedMonthlyWorkdays: Double = Self.averageMonthlyWorkDays
     var monthlySalaryCycleStartDay: Int = 1
+    var subsidies: [SalarySubsidy] = []
     var workTime: TimeRange = .defaultWorkTime
     var lunchBreakEnabled: Bool = true
     var lunchBreak: TimeRange = .defaultLunchBreak
@@ -499,8 +553,8 @@ struct SalaryConfig: Codable, Equatable {
         }
     }
 
-    /// 所有薪资类型都先归一成日薪，后续所有展示值都从日薪派生。
-    private var normalizedDailySalary: Double {
+    /// 只包含用户输入的基础薪资，不含任何补贴；补贴需要按自身规则单独计入。
+    var baseDailySalary: Double {
         switch salaryType {
         case .daily:
             return salaryAmount
@@ -511,16 +565,67 @@ struct SalaryConfig: Codable, Equatable {
         }
     }
 
+    /// 按日补贴直接进入日薪，因此会影响实时收入、秒薪、分薪和时薪。
+    var dailySubsidyTotal: Double {
+        subsidies.reduce(0) { total, subsidy in
+            guard subsidy.enabled, subsidy.type == .daily else { return total }
+            return total + subsidy.amount
+        }
+    }
+
+    /// 按月补贴的月度原值，用于月薪和年薪汇总；是否平摊只影响日薪和实时收入。
+    var monthlySubsidyTotal: Double {
+        subsidies.reduce(0) { total, subsidy in
+            guard subsidy.enabled, subsidy.type == .monthly else { return total }
+            return total + subsidy.amount
+        }
+    }
+
+    var monthlySubsidyAddedToMonthlyTotal: Double {
+        subsidies.reduce(0) { total, subsidy in
+            guard subsidy.enabled,
+                  subsidy.type == .monthly,
+                  subsidy.monthlyApplicationMode == .addToMonthlySalary else {
+                return total
+            }
+            return total + subsidy.amount
+        }
+    }
+
+    /// 只有选择“平摊到每天”的按月补贴会折进日薪，分母按每条补贴自己的规则计算。
+    var monthlySubsidySpreadDailyTotal: Double {
+        subsidies.reduce(0) { total, subsidy in
+            guard subsidy.enabled,
+                  subsidy.type == .monthly,
+                  subsidy.monthlyApplicationMode == .spreadToDailySalary else {
+                return total
+            }
+            let divisor = monthlySubsidyProrationDays(for: subsidy)
+            guard divisor > 0 else { return total }
+            return total + subsidy.amount / divisor
+        }
+    }
+
+    var effectiveDailySubsidyTotal: Double {
+        dailySubsidyTotal + monthlySubsidySpreadDailyTotal
+    }
+
     var monthlySalary: Double {
-        normalizedDailySalary * monthlySalaryWorkdayCount
+        let recurringDailyCompensation = baseDailySalary + dailySubsidyTotal
+        return recurringDailyCompensation * monthlySalaryWorkdayCount + monthlySubsidyTotal
     }
 
     var dailySalary: Double {
-        normalizedDailySalary
+        baseDailySalary + effectiveDailySubsidyTotal
     }
 
     var yearlySalary: Double {
-        normalizedDailySalary * Self.yearlyWorkDays
+        let recurringDailyCompensation = baseDailySalary + dailySubsidyTotal
+        return recurringDailyCompensation * Self.yearlyWorkDays + monthlySubsidyTotal * 12
+    }
+
+    var hasCompensation: Bool {
+        salaryAmount > 0 || subsidies.contains { $0.enabled && $0.amount > 0 }
     }
 
     var salaryPerHour: Double {
@@ -547,8 +652,22 @@ struct SalaryConfig: Codable, Equatable {
     func salaryCyclePeriod(containing date: Date, calendar: Calendar = .current) -> SalaryCyclePeriod {
         let start = salaryCycleStart(containing: date, calendar: calendar)
         let nextStart = nextSalaryCycleStart(after: start, calendar: calendar)
+        let totalDays = max(0, calendar.dateComponents([.day], from: start, to: nextStart).day ?? 0)
         let paidWorkdays = paidWorkdayCount(from: start, to: nextStart, calendar: calendar)
-        return SalaryCyclePeriod(start: start, endExclusive: nextStart, paidWorkdays: paidWorkdays)
+        return SalaryCyclePeriod(start: start, endExclusive: nextStart, totalDays: totalDays, paidWorkdays: paidWorkdays)
+    }
+
+    func monthlySubsidyProrationDays(for subsidy: SalarySubsidy) -> Double {
+        switch subsidy.monthlyProrationMode {
+        case .salaryCycleTotalDays:
+            let days = currentSalaryCyclePeriod.totalDays
+            return days > 0 ? Double(days) : subsidy.fixedProrationDays
+        case .fixedDays:
+            return subsidy.fixedProrationDays
+        case .salaryCycleWorkdays:
+            let workdays = currentSalaryCyclePeriod.paidWorkdays
+            return workdays > 0 ? Double(workdays) : subsidy.fixedProrationDays
+        }
     }
 
     /// 判断某一天是否计薪，节假日和调休日只在“仅工作日”模式下生效。
@@ -637,12 +756,17 @@ struct SalaryConfig: Codable, Equatable {
     }
 
     var isValid: Bool {
-        salaryAmount > 0 && paidWorkMinutes > 0
+        hasCompensation && paidWorkMinutes > 0
     }
 
     /// 每次保存前统一修正越界值，避免设置页输入非法值后污染持久化配置。
     mutating func normalize() {
         salaryAmount = salaryAmount.isFinite ? max(0, salaryAmount) : 0
+        subsidies = subsidies.map { subsidy in
+            var normalized = subsidy
+            normalized.normalize(fixedDaysRange: Self.monthlyWorkdaysRange)
+            return normalized
+        }
         workTime.normalizeClockFields()
         lunchBreak.normalizeClockFields()
         dinnerBreak.normalizeClockFields()

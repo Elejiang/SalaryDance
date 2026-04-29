@@ -9,7 +9,7 @@ struct PopoverPreviewView: View {
     var body: some View {
         let salaryTint = Color(nsColor: config.popoverSalaryNSColor)
         let isPrivate = config.opensPrivatePopoverFromStatusItemClick
-        let previewEarnings = config.salaryAmount > 0 ? config.dailySalary * previewProgress : 0
+        let previewEarnings = config.hasCompensation ? config.dailySalary * previewProgress : 0
 
         VStack(alignment: .leading, spacing: 8) {
             Text("弹窗")

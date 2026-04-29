@@ -24,7 +24,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .salary: return "输入薪资和金额精度"
+        case .salary: return "输入薪资、补贴和金额精度"
         case .time: return "工作时段、休息和计薪时长"
         case .display: return "状态栏、弹窗和时间轴"
         case .shortcut: return "快捷键录制和动作顺序"
@@ -42,6 +42,39 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .calendar: return "calendar"
         case .app: return "gearshape"
         }
+    }
+}
+
+/// 补贴启停使用滑动开关表达“参与/不参与计算”，绿色开启、红色关闭，便于做金额对比。
+private struct SubsidyStatusToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.16)) {
+                configuration.isOn.toggle()
+            }
+        } label: {
+            ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(configuration.isOn ? Color(nsColor: .systemGreen) : Color(nsColor: .systemRed))
+
+                Circle()
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.18), radius: 1.5, x: 0, y: 1)
+                    .padding(3)
+            }
+            .frame(width: 42, height: 22)
+            .overlay {
+                Image(systemName: configuration.isOn ? "checkmark" : "xmark")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundColor(.white.opacity(0.9))
+                    .frame(maxWidth: .infinity, alignment: configuration.isOn ? .leading : .trailing)
+                    .padding(.horizontal, 7)
+            }
+            .animation(.easeInOut(duration: 0.16), value: configuration.isOn)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(configuration.isOn ? "补贴已开启" : "补贴已关闭"))
+        .help(configuration.isOn ? "关闭补贴" : "开启补贴")
     }
 }
 
@@ -252,7 +285,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 薪资设置包含输入、月薪折算方式和六个薪资换算结果。
+    /// 薪资设置包含基础薪资、补贴、月薪折算方式和六个薪资换算结果。
     private var salarySection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 12) {
@@ -288,8 +321,9 @@ struct SettingsView: View {
                 }
 
                 monthlySalaryCalculationSection
+                subsidyListSection
 
-                if configManager.config.salaryAmount > 0 {
+                if configManager.config.hasCompensation {
                     Divider()
 
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), alignment: .leading, spacing: 10) {
@@ -448,6 +482,190 @@ struct SettingsView: View {
         }
         .onAppear {
             ensureSalaryCycleHolidayData()
+        }
+    }
+
+    /// 补贴列表和薪资输入放在同一页，避免用户在日薪、月薪和实时收入之间来回推导。
+    private var subsidyListSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider()
+
+            HStack(alignment: .center, spacing: 8) {
+                Label("补贴", systemImage: "plus.circle")
+                    .font(.callout.weight(.semibold))
+
+                Spacer()
+
+                Button {
+                    addSubsidy(type: .daily)
+                } label: {
+                    Label("按日", systemImage: "calendar")
+                }
+                .controlSize(.small)
+
+                Button {
+                    addSubsidy(type: .monthly)
+                } label: {
+                    Label("按月", systemImage: "calendar.badge.clock")
+                }
+                .controlSize(.small)
+            }
+
+            Text(subsidyExplanation)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if configManager.config.subsidies.isEmpty {
+                Text("暂无补贴。按日补贴会进入今日收入；按月补贴可只汇入月薪，或按规则平摊到每天。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(configManager.config.subsidies) { subsidy in
+                        subsidyRow(subsidy)
+                    }
+                }
+            }
+        }
+    }
+
+    /// 单条补贴把名称、金额和按月规则集中展示，减少复杂规则散落在多行输入里造成的误解。
+    private func subsidyRow(_ subsidy: SalarySubsidy) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: subsidyEnabledBinding(for: subsidy.id))
+                    .labelsHidden()
+                    .toggleStyle(SubsidyStatusToggleStyle())
+
+                TextField("补贴名", text: subsidyNameBinding(for: subsidy.id))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 120)
+
+                Picker("", selection: subsidyTypeBinding(for: subsidy.id)) {
+                    ForEach(SalarySubsidyType.allCases) { type in
+                        Text(type.rawValue).tag(type)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 110)
+
+                TextField("0", value: subsidyAmountBinding(for: subsidy.id), format: .number.precision(.fractionLength(0...2)))
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                    .monospacedDigit()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 96)
+
+                Text("元")
+                    .foregroundColor(.secondary)
+
+                Spacer(minLength: 0)
+
+                Text(subsidyImpactSummary(for: subsidy))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                Button(role: .destructive) {
+                    removeSubsidy(subsidy.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("删除补贴")
+            }
+
+            if subsidy.type == .monthly {
+                monthlySubsidyRuleRow(subsidy)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.42), lineWidth: 1)
+        )
+        .opacity(subsidy.enabled ? 1 : 0.62)
+    }
+
+    @ViewBuilder
+    private func monthlySubsidyRuleRow(_ subsidy: SalarySubsidy) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text("计入方式")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(width: 70, alignment: .leading)
+
+                Picker("", selection: monthlySubsidyApplicationBinding(for: subsidy.id)) {
+                    ForEach(MonthlySubsidyApplicationMode.allCases) { mode in
+                        Text(mode.rawValue).tag(mode)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+
+                Spacer(minLength: 0)
+            }
+
+            if subsidy.monthlyApplicationMode == .spreadToDailySalary {
+                HStack(spacing: 8) {
+                    Text("平摊方式")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(width: 70, alignment: .leading)
+
+                    Picker("", selection: monthlySubsidyProrationBinding(for: subsidy.id)) {
+                        ForEach(MonthlySubsidyProrationMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 156)
+
+                    if subsidy.monthlyProrationMode == .fixedDays {
+                        TextField(
+                            "21.75",
+                            value: subsidyFixedDaysBinding(for: subsidy.id),
+                            format: .number.precision(.fractionLength(0...2))
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .monospacedDigit()
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 64)
+
+                        Text("天")
+                            .foregroundColor(.secondary)
+
+                        Stepper("", value: subsidyFixedDaysBinding(for: subsidy.id), in: SalaryConfig.monthlyWorkdaysRange, step: 0.25)
+                            .labelsHidden()
+                            .frame(width: 44)
+                    }
+
+                    Spacer(minLength: 0)
+                }
+
+                Text(monthlySubsidyProrationDescription(for: subsidy))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(subsidy.enabled ? "只增加月薪和年薪，不进入今日收入、秒薪、分薪和时薪。" : "已关闭，不参与任何薪资计算。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
@@ -1395,6 +1613,188 @@ struct SettingsView: View {
         }
     }
 
+    private var subsidyExplanation: String {
+        let config = configManager.config
+        let base = """
+        按日补贴直接加到日薪，会进入今日收入、剩余收入和秒/分/时薪。
+        按月补贴的月度原值会计入月薪和年薪；只有选择“平摊到每天”时，才会按分摊结果进入日薪和实时收入。
+        """
+
+        guard !config.subsidies.isEmpty else {
+            return base
+        }
+
+        return base + "\n关闭的补贴不会参与任何计算。当前已开启日薪补贴合计 \(formatMoney(config.effectiveDailySubsidyTotal))，已开启按月补贴合计 \(formatMoney(config.monthlySubsidyTotal))。"
+    }
+
+    private func subsidyEnabledBinding(for id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { subsidy(for: id)?.enabled ?? true },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.enabled = newValue
+                }
+            }
+        )
+    }
+
+    private func subsidyNameBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { subsidy(for: id)?.name ?? "" },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.name = String(newValue.prefix(24))
+                }
+            }
+        )
+    }
+
+    private func subsidyTypeBinding(for id: UUID) -> Binding<SalarySubsidyType> {
+        Binding(
+            get: { subsidy(for: id)?.type ?? .daily },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.type = newValue
+                }
+            }
+        )
+    }
+
+    private func subsidyAmountBinding(for id: UUID) -> Binding<Double> {
+        Binding(
+            get: { subsidy(for: id)?.amount ?? 0 },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.amount = normalizedPositiveAmount(newValue)
+                }
+            }
+        )
+    }
+
+    private func monthlySubsidyApplicationBinding(for id: UUID) -> Binding<MonthlySubsidyApplicationMode> {
+        Binding(
+            get: { subsidy(for: id)?.monthlyApplicationMode ?? .spreadToDailySalary },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.monthlyApplicationMode = newValue
+                }
+            }
+        )
+    }
+
+    private func monthlySubsidyProrationBinding(for id: UUID) -> Binding<MonthlySubsidyProrationMode> {
+        Binding(
+            get: { subsidy(for: id)?.monthlyProrationMode ?? .fixedDays },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.monthlyProrationMode = newValue
+                }
+            }
+        )
+    }
+
+    private func subsidyFixedDaysBinding(for id: UUID) -> Binding<Double> {
+        Binding(
+            get: { subsidy(for: id)?.fixedProrationDays ?? SalarySubsidy.defaultFixedProrationDays },
+            set: { newValue in
+                updateSubsidy(id) { subsidy in
+                    subsidy.fixedProrationDays = InputValidation.clamped(newValue, in: SalaryConfig.monthlyWorkdaysRange)
+                }
+            }
+        )
+    }
+
+    private func subsidy(for id: UUID) -> SalarySubsidy? {
+        configManager.config.subsidies.first { $0.id == id }
+    }
+
+    private func addSubsidy(type: SalarySubsidyType) {
+        var subsidy = SalarySubsidy()
+        subsidy.type = type
+        subsidy.name = "补贴名"
+
+        var config = configManager.config
+        config.subsidies.append(subsidy)
+        configManager.config = config
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func removeSubsidy(_ id: UUID) {
+        var config = configManager.config
+        config.subsidies.removeAll { $0.id == id }
+        configManager.config = config
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func updateSubsidy(_ id: UUID, update: (inout SalarySubsidy) -> Void) {
+        var config = configManager.config
+        guard let index = config.subsidies.firstIndex(where: { $0.id == id }) else { return }
+
+        update(&config.subsidies[index])
+        config.subsidies[index].normalize(fixedDaysRange: SalaryConfig.monthlyWorkdaysRange)
+        configManager.config = config
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func normalizedPositiveAmount(_ value: Double) -> Double {
+        value.isFinite ? max(0, value) : 0
+    }
+
+    private func subsidyImpactSummary(for subsidy: SalarySubsidy) -> String {
+        guard subsidy.enabled else {
+            return "已关闭"
+        }
+
+        switch subsidy.type {
+        case .daily:
+            return "日薪 +\(formatMoney(subsidy.amount))"
+        case .monthly:
+            if subsidy.monthlyApplicationMode == .addToMonthlySalary {
+                return "月薪 +\(formatMoney(subsidy.amount))"
+            }
+            let dailyAmount = subsidyDailyEquivalent(for: subsidy)
+            return "日薪 +\(formatMoney(dailyAmount)) / 月薪 +\(formatMoney(subsidy.amount))"
+        }
+    }
+
+    private func monthlySubsidyProrationDescription(for subsidy: SalarySubsidy) -> String {
+        guard subsidy.enabled else {
+            return "已关闭，不参与任何薪资计算。"
+        }
+
+        let config = configManager.config
+        let period = config.currentSalaryCyclePeriod
+        let divisor = config.monthlySubsidyProrationDays(for: subsidy)
+        let dailyAmount = subsidyDailyEquivalent(for: subsidy)
+        let divisorText = formatWorkdayCount(divisor)
+        let prefix: String
+
+        switch subsidy.monthlyProrationMode {
+        case .salaryCycleTotalDays:
+            prefix = "当前周期 \(formatSalaryCyclePeriod(period)) 共 \(period.totalDays) 天"
+        case .fixedDays:
+            prefix = "固定按 \(formatWorkdayCount(subsidy.fixedProrationDays)) 天"
+        case .salaryCycleWorkdays:
+            prefix = "当前周期 \(formatSalaryCyclePeriod(period)) 计薪 \(period.paidWorkdays) 天"
+        }
+
+        return "\(prefix)平摊，实际分母 \(divisorText) 天，折合日补贴 \(formatMoney(dailyAmount))；月薪汇总仍按每月 \(formatMoney(subsidy.amount)) 计入。"
+    }
+
+    private func subsidyDailyEquivalent(for subsidy: SalarySubsidy) -> Double {
+        guard subsidy.enabled else { return 0 }
+
+        switch subsidy.type {
+        case .daily:
+            return subsidy.amount
+        case .monthly:
+            guard subsidy.monthlyApplicationMode == .spreadToDailySalary else { return 0 }
+            let divisor = configManager.config.monthlySubsidyProrationDays(for: subsidy)
+            guard divisor > 0 else { return 0 }
+            return subsidy.amount / divisor
+        }
+    }
+
     /// 下面这些颜色 Binding 负责在 SwiftUI Color 和配置中的 hex 字符串之间转换。
     private var lunchBreakColorBinding: Binding<Color> {
         Binding(
@@ -1505,23 +1905,25 @@ struct SettingsView: View {
         return showCurrencySymbol ? "¥\(amount)" : amount
     }
 
-    /// 薪资换算说明必须随月薪折算模式变化，避免用户误以为月薪和年薪永远固定。
+    /// 薪资换算说明必须随月薪折算和补贴规则变化，避免用户误以为所有金额都只按日薪反推。
     private var salaryConversionDescription: String {
         let config = configManager.config
         let monthlyDescription: String
         switch config.resolvedMonthlySalaryCalculationMode {
         case .fixedAverage:
-            monthlyDescription = "月薪 = 日薪 × 固定 \(formatWorkdayCount(config.resolvedFixedMonthlyWorkdays)) 天"
+            monthlyDescription = "基础月薪 = 基础日薪 × 固定 \(formatWorkdayCount(config.resolvedFixedMonthlyWorkdays)) 天"
         case .salaryCycleWorkdays:
             let period = config.currentSalaryCyclePeriod
-            monthlyDescription = "月薪 = 日薪 × 当前薪资周期计薪 \(period.paidWorkdays) 天（\(formatSalaryCyclePeriod(period))）"
+            monthlyDescription = "基础月薪 = 基础日薪 × 当前薪资周期计薪 \(period.paidWorkdays) 天（\(formatSalaryCyclePeriod(period))）"
         }
 
         return """
         换算说明：
-        所有输入先统一折算为日薪。
-        \(monthlyDescription)，年薪 = 日薪 × 250。
-        秒薪、分薪和时薪按当前计薪时长 \(formatDuration(config.paidWorkMinutes)) 计算。
+        基础薪资先统一折算为基础日薪。
+        展示日薪 = 基础日薪 + 按日补贴 + 已平摊到每天的按月补贴。
+        \(monthlyDescription)；展示月薪 = 基础月薪 + 按日补贴 × 月薪折算天数 + 按月补贴原值。
+        展示年薪 =（基础日薪 + 按日补贴）× 250 + 按月补贴原值 × 12。
+        秒薪、分薪和时薪按展示日薪与当前计薪时长 \(formatDuration(config.paidWorkMinutes)) 计算。
         """
     }
 
@@ -1544,8 +1946,14 @@ struct SettingsView: View {
     /// 动态薪资周期依赖节假日和调休日，切到该模式时主动加载涉及年份。
     private func ensureSalaryCycleHolidayData() {
         let config = configManager.config
+        let subsidyUsesCycleWorkdays = config.subsidies.contains { subsidy in
+            subsidy.enabled
+                && subsidy.type == .monthly
+                && subsidy.monthlyApplicationMode == .spreadToDailySalary
+                && subsidy.monthlyProrationMode == .salaryCycleWorkdays
+        }
         guard config.workDayRule == .weekdaysOnly,
-              config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays else {
+              config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays || subsidyUsesCycleWorkdays else {
             return
         }
         holidayManager.ensureYearsLoaded(config.currentSalaryCycleYears)
