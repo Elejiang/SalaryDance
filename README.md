@@ -3,6 +3,9 @@
 薪动是一个 macOS 菜单栏 App，用实时薪资、工作进度、休息时间、快捷键和弹窗展示，把“今天赚了多少”变成一个随时间变化的桌面反馈。
 全程通过vibe coding完成，人工仅少量修改文档。作者完全没学过mac开发。
 
+## 下载
+
+[下载最新版本](https://github.com/Elejiang/SalaryDance/releases)
 
 ## 快速预览
 ### 实时状态栏：
