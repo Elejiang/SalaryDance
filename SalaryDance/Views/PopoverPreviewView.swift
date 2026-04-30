@@ -9,7 +9,8 @@ struct PopoverPreviewView: View {
     var body: some View {
         let salaryTint = Color(nsColor: config.popoverSalaryNSColor)
         let isPrivate = config.opensPrivatePopoverFromStatusItemClick
-        let previewEarnings = config.hasCompensation ? config.dailySalary * previewProgress : 0
+        let dailySalary = config.effectiveDailySalary(on: Date())
+        let previewEarnings = config.hasCompensation ? dailySalary * previewProgress : 0
 
         VStack(alignment: .leading, spacing: 8) {
             Text("弹窗")
@@ -34,7 +35,7 @@ struct PopoverPreviewView: View {
 
                         if config.popoverDisplaysRemainingEarnings {
                             remainingEarningsPreview(
-                                amount: max(0, config.dailySalary - previewEarnings),
+                                amount: max(0, dailySalary - previewEarnings),
                                 isPrivate: isPrivate,
                                 salaryTint: salaryTint
                             )
@@ -111,7 +112,7 @@ struct PopoverPreviewView: View {
             }
 
             if config.popoverDisplaysWorkProgress {
-                TimelinePreviewBar(config: config, progress: previewProgress)
+                TimelinePreviewBar(config: config, progress: previewProgress, workTime: config.effectiveWorkTime(on: Date()))
                     .frame(height: config.workProgressDisplaysSegmentLabels ? 32 : 14)
             }
         }
@@ -139,17 +140,18 @@ struct PopoverPreviewView: View {
     /// 根据弹窗展示开关生成预览指标，顺序必须和真实弹窗保持一致。
     private var previewMetrics: [SalaryMetricItem] {
         var metrics: [SalaryMetricItem] = []
+        let now = Date()
         if config.popoverDisplaysSecondSalary {
-            metrics.append(SalaryMetricItem(id: "second", title: "秒薪", value: formatMoney(config.salaryPerSecond)))
+            metrics.append(SalaryMetricItem(id: "second", title: "秒薪", value: formatMoney(config.salaryPerSecond(on: now))))
         }
         if config.popoverDisplaysMinuteSalary {
-            metrics.append(SalaryMetricItem(id: "minute", title: "分薪", value: formatMoney(config.salaryPerMinute)))
+            metrics.append(SalaryMetricItem(id: "minute", title: "分薪", value: formatMoney(config.salaryPerMinute(on: now))))
         }
         if config.popoverDisplaysHourlySalary {
-            metrics.append(SalaryMetricItem(id: "hour", title: "时薪", value: formatMoney(config.salaryPerHour)))
+            metrics.append(SalaryMetricItem(id: "hour", title: "时薪", value: formatMoney(config.salaryPerHour(on: now))))
         }
         if config.popoverDisplaysDailySalary {
-            metrics.append(SalaryMetricItem(id: "day", title: "日薪", value: formatMoney(config.dailySalary)))
+            metrics.append(SalaryMetricItem(id: "day", title: "日薪", value: formatMoney(config.effectiveDailySalary(on: now))))
         }
         if config.popoverDisplaysMonthlySalary {
             metrics.append(SalaryMetricItem(id: "month", title: "月薪", value: formatMoney(config.monthlySalary)))

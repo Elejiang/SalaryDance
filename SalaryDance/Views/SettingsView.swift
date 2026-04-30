@@ -47,6 +47,11 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
 
 /// 补贴启停使用滑动开关表达“参与/不参与计算”，绿色开启、红色关闭，便于做金额对比。
 private struct SubsidyStatusToggleStyle: ToggleStyle {
+    var enabledAccessibilityLabel = "补贴已开启"
+    var disabledAccessibilityLabel = "补贴已关闭"
+    var enabledHelp = "关闭补贴"
+    var disabledHelp = "开启补贴"
+
     func makeBody(configuration: Configuration) -> some View {
         Button {
             withAnimation(.easeInOut(duration: 0.16)) {
@@ -73,8 +78,8 @@ private struct SubsidyStatusToggleStyle: ToggleStyle {
             .animation(.easeInOut(duration: 0.16), value: configuration.isOn)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(Text(configuration.isOn ? "补贴已开启" : "补贴已关闭"))
-        .help(configuration.isOn ? "关闭补贴" : "开启补贴")
+        .accessibilityLabel(Text(configuration.isOn ? enabledAccessibilityLabel : disabledAccessibilityLabel))
+        .help(configuration.isOn ? enabledHelp : disabledHelp)
     }
 }
 
@@ -280,6 +285,7 @@ struct SettingsView: View {
             shortcutSettingsSection
         case .calendar:
             workDaySection
+            specialWorkdaySection
         case .app:
             appBehaviorSection
         }
@@ -326,11 +332,12 @@ struct SettingsView: View {
                 if configManager.config.hasCompensation {
                     Divider()
 
+                    let today = Date()
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), alignment: .leading, spacing: 10) {
-                        salaryMetricCard(title: "秒薪", value: formatMoney(configManager.config.salaryPerSecond))
-                        salaryMetricCard(title: "分薪", value: formatMoney(configManager.config.salaryPerMinute))
-                        salaryMetricCard(title: "时薪", value: formatMoney(configManager.config.salaryPerHour))
-                        salaryMetricCard(title: "日薪", value: formatMoney(configManager.config.dailySalary))
+                        salaryMetricCard(title: "秒薪", value: formatMoney(configManager.config.salaryPerSecond(on: today)))
+                        salaryMetricCard(title: "分薪", value: formatMoney(configManager.config.salaryPerMinute(on: today)))
+                        salaryMetricCard(title: "时薪", value: formatMoney(configManager.config.salaryPerHour(on: today)))
+                        salaryMetricCard(title: "日薪", value: formatMoney(configManager.config.effectiveDailySalary(on: today)))
                         salaryMetricCard(title: "月薪", value: formatMoney(configManager.config.monthlySalary))
                         salaryMetricCard(title: "年薪", value: formatMoney(configManager.config.yearlySalary))
                     }
@@ -843,6 +850,240 @@ struct SettingsView: View {
         } label: {
             Label("计薪规则", systemImage: "calendar")
                 .font(.headline)
+        }
+    }
+
+    /// 特殊工作日规则按列表顺序匹配，第一条启用且命中的规则覆盖当天上下班时间。
+    private var specialWorkdaySection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("用于设置节假日/周末前一天、固定星期或隔周固定日等特殊工作安排；命中后只改当天上下班时间，从而影响当天实时收入和秒/分/时薪。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("规则优先级")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+                        Text("从上到下匹配，命中后只覆盖当天上下班时间。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        addSpecialWorkdayRule()
+                    } label: {
+                        Label("新增规则", systemImage: "plus")
+                    }
+                    .controlSize(.small)
+                }
+
+                specialWorkdayTodayStatus
+
+                if configManager.config.specialWorkdayRules.isEmpty {
+                    Text("暂无特殊工作日规则。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(Array(configManager.config.specialWorkdayRules.enumerated()), id: \.element.id) { index, rule in
+                            specialWorkdayRuleRow(rule, priority: index)
+                        }
+                    }
+                }
+            }
+            .padding(12)
+        } label: {
+            Label("特殊工作日", systemImage: "calendar.badge.clock")
+                .font(.headline)
+        }
+    }
+
+    private var specialWorkdayTodayStatus: some View {
+        let today = Date()
+        let matchedRule = configManager.config.matchingSpecialWorkdayRule(on: today)
+
+        return HStack(spacing: 6) {
+            Image(systemName: matchedRule == nil ? "minus.circle" : "checkmark.circle.fill")
+                .foregroundColor(matchedRule == nil ? .secondary : .green)
+
+            if let matchedRule {
+                Text("今日命中：\(matchedRule.displayName)，\(matchedRule.workTime.startString)-\(matchedRule.workTime.endString)")
+            } else {
+                Text("今日未命中特殊工作时间")
+            }
+        }
+        .font(.caption)
+        .foregroundColor(.secondary)
+    }
+
+    private func specialWorkdayRuleRow(_ rule: SpecialWorkdayRule, priority: Int) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Toggle("", isOn: specialRuleEnabledBinding(for: rule.id))
+                    .labelsHidden()
+                    .toggleStyle(SubsidyStatusToggleStyle(
+                        enabledAccessibilityLabel: "规则已开启",
+                        disabledAccessibilityLabel: "规则已关闭",
+                        enabledHelp: "关闭规则",
+                        disabledHelp: "开启规则"
+                    ))
+
+                TextField("规则名", text: specialRuleNameBinding(for: rule.id))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 128)
+
+                Picker("", selection: specialRuleKindBinding(for: rule.id)) {
+                    ForEach(SpecialWorkdayRuleKind.allCases) { kind in
+                        Text(kind.title).tag(kind)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 132)
+
+                Spacer(minLength: 0)
+
+                Text("#\(priority + 1)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+                    .frame(width: 28)
+
+                HStack(spacing: 2) {
+                    Button {
+                        moveSpecialWorkdayRule(rule.id, offset: -1)
+                    } label: {
+                        Image(systemName: "chevron.up")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(priority == 0)
+                    .help("上移")
+
+                    Button {
+                        moveSpecialWorkdayRule(rule.id, offset: 1)
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(priority == configManager.config.specialWorkdayRules.count - 1)
+                    .help("下移")
+                }
+
+                Button(role: .destructive) {
+                    removeSpecialWorkdayRule(rule.id)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help("删除规则")
+            }
+
+            specialWorkdayConditionControls(rule)
+
+            HStack(spacing: 14) {
+                HStack(spacing: 8) {
+                    Text("上班")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    timePicker(
+                        hour: specialRuleWorkTimeBinding(for: rule.id, \.startHour),
+                        minute: specialRuleWorkTimeBinding(for: rule.id, \.startMinute)
+                    )
+                }
+
+                HStack(spacing: 8) {
+                    Text("下班")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    timePicker(
+                        hour: specialRuleWorkTimeBinding(for: rule.id, \.endHour),
+                        minute: specialRuleWorkTimeBinding(for: rule.id, \.endMinute)
+                    )
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Text(specialWorkdayRuleSummary(rule))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.42), lineWidth: 1)
+        )
+        .opacity(rule.enabled ? 1 : 0.62)
+    }
+
+    @ViewBuilder
+    private func specialWorkdayConditionControls(_ rule: SpecialWorkdayRule) -> some View {
+        switch rule.kind {
+        case .dayBeforeRestDay:
+            EmptyView()
+        case .weekly:
+            specialWeekdayToggleRow(for: rule.id)
+        case .intervalWeeks:
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text("每")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Stepper(value: specialRuleIntervalWeeksBinding(for: rule.id), in: SpecialWorkdayRule.intervalWeeksRange) {
+                        Text("\(rule.intervalWeeks) 周")
+                            .font(.caption.monospacedDigit())
+                    }
+                    .frame(width: 92)
+
+                    specialWeekdayToggleRow(for: rule.id)
+                }
+
+                HStack(spacing: 8) {
+                    Text("起始周")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    DatePicker("", selection: specialRuleAnchorDateBinding(for: rule.id), displayedComponents: .date)
+                        .labelsHidden()
+                        .frame(width: 128)
+                    Text("以这个日期所在的周一到周日作为第 1 个循环周；之后每隔设定周数，在上面勾选的星期生效。")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        case .exactDate:
+            HStack(spacing: 8) {
+                Text("日期")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                DatePicker("", selection: specialRuleExactDateBinding(for: rule.id), displayedComponents: .date)
+                    .labelsHidden()
+                    .frame(width: 128)
+            }
+        }
+    }
+
+    private func specialWeekdayToggleRow(for id: UUID) -> some View {
+        HStack(spacing: 6) {
+            ForEach(1...7, id: \.self) { day in
+                Toggle(weekdayTitle(day), isOn: specialRuleWeekdayBinding(for: id, day: day))
+                    .toggleStyle(.button)
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+            }
         }
     }
 
@@ -1600,6 +1841,147 @@ struct SettingsView: View {
         }
     }
 
+    private func specialRule(for id: UUID) -> SpecialWorkdayRule? {
+        configManager.config.specialWorkdayRules.first { $0.id == id }
+    }
+
+    private func addSpecialWorkdayRule() {
+        var rule = SpecialWorkdayRule()
+        rule.name = "特殊工作日 \(configManager.config.specialWorkdayRules.count + 1)"
+
+        var config = configManager.config
+        config.specialWorkdayRules.append(rule)
+        configManager.config = config
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func removeSpecialWorkdayRule(_ id: UUID) {
+        var config = configManager.config
+        config.specialWorkdayRules.removeAll { $0.id == id }
+        configManager.config = config
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func moveSpecialWorkdayRule(_ id: UUID, offset: Int) {
+        var config = configManager.config
+        guard let sourceIndex = config.specialWorkdayRules.firstIndex(where: { $0.id == id }) else {
+            return
+        }
+        let targetIndex = sourceIndex + offset
+        guard config.specialWorkdayRules.indices.contains(targetIndex) else {
+            return
+        }
+
+        let moving = config.specialWorkdayRules.remove(at: sourceIndex)
+        config.specialWorkdayRules.insert(moving, at: targetIndex)
+
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.82, blendDuration: 0.08)) {
+            configManager.config = config
+        }
+    }
+
+    private func updateSpecialWorkdayRule(_ id: UUID, update: (inout SpecialWorkdayRule) -> Void) {
+        var config = configManager.config
+        guard let index = config.specialWorkdayRules.firstIndex(where: { $0.id == id }) else { return }
+
+        update(&config.specialWorkdayRules[index])
+        config.specialWorkdayRules[index].normalize()
+        configManager.config = config
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func specialRuleEnabledBinding(for id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { specialRule(for: id)?.enabled ?? true },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.enabled = newValue
+                }
+            }
+        )
+    }
+
+    private func specialRuleNameBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { specialRule(for: id)?.name ?? "" },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.name = String(newValue.prefix(24))
+                }
+            }
+        )
+    }
+
+    private func specialRuleKindBinding(for id: UUID) -> Binding<SpecialWorkdayRuleKind> {
+        Binding(
+            get: { specialRule(for: id)?.kind ?? .dayBeforeRestDay },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.kind = newValue
+                }
+            }
+        )
+    }
+
+    private func specialRuleWeekdayBinding(for id: UUID, day: Int) -> Binding<Bool> {
+        Binding(
+            get: { specialRule(for: id)?.weekdays.contains(day) ?? false },
+            set: { isOn in
+                updateSpecialWorkdayRule(id) { rule in
+                    if isOn {
+                        rule.weekdays.insert(day)
+                    } else if rule.weekdays.count > 1 {
+                        rule.weekdays.remove(day)
+                    }
+                }
+            }
+        )
+    }
+
+    private func specialRuleIntervalWeeksBinding(for id: UUID) -> Binding<Int> {
+        Binding(
+            get: { specialRule(for: id)?.intervalWeeks ?? 2 },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.intervalWeeks = newValue
+                }
+            }
+        )
+    }
+
+    private func specialRuleAnchorDateBinding(for id: UUID) -> Binding<Date> {
+        Binding(
+            get: { specialRule(for: id)?.anchorDate ?? Date() },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.anchorDate = Calendar.current.startOfDay(for: newValue)
+                }
+            }
+        )
+    }
+
+    private func specialRuleExactDateBinding(for id: UUID) -> Binding<Date> {
+        Binding(
+            get: { specialRule(for: id)?.exactDate ?? Date() },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.exactDate = Calendar.current.startOfDay(for: newValue)
+                }
+            }
+        )
+    }
+
+    private func specialRuleWorkTimeBinding(for id: UUID, _ keyPath: WritableKeyPath<TimeRange, Int>) -> Binding<Int> {
+        Binding(
+            get: { specialRule(for: id)?.workTime[keyPath: keyPath] ?? 0 },
+            set: { newValue in
+                updateSpecialWorkdayRule(id) { rule in
+                    rule.workTime[keyPath: keyPath] = newValue
+                }
+            }
+        )
+    }
+
     /// 时间输入统一使用支持键盘输入的组件，避免多个设置项行为不一致。
     private func timePicker(hour: Binding<Int>, minute: Binding<Int>) -> some View {
         TimeInputView(hour: hour, minute: minute)
@@ -1931,6 +2313,43 @@ struct SettingsView: View {
         InputValidation.formattedDecimal(value, maxFractionDigits: 2)
     }
 
+    private func specialWorkdayRuleSummary(_ rule: SpecialWorkdayRule) -> String {
+        guard rule.enabled else {
+            return "已关闭，不参与特殊工作时间匹配。"
+        }
+        return "\(specialWorkdayConditionSummary(rule))；命中后工作时间 \(rule.workTime.startString)-\(rule.workTime.endString)。"
+    }
+
+    private func specialWorkdayConditionSummary(_ rule: SpecialWorkdayRule) -> String {
+        switch rule.kind {
+        case .dayBeforeRestDay:
+            return "节假日和周末的前一天"
+        case .weekly:
+            return "每周 \(weekdayListText(rule.weekdays))"
+        case .intervalWeeks:
+            return "从 \(formatShortDate(rule.anchorDate)) 所在周起，每 \(rule.intervalWeeks) 周的 \(weekdayListText(rule.weekdays))"
+        case .exactDate:
+            return formatShortDate(rule.exactDate)
+        }
+    }
+
+    private func weekdayListText(_ weekdays: Set<Int>) -> String {
+        weekdays.sorted().map(weekdayTitle).joined(separator: "、")
+    }
+
+    private func weekdayTitle(_ day: Int) -> String {
+        let names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+        guard (1...7).contains(day) else { return "周五" }
+        return names[day - 1]
+    }
+
+    private func formatShortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年MM月dd日"
+        return formatter.string(from: date)
+    }
+
     private func formatSalaryCyclePeriod(_ period: SalaryCyclePeriod) -> String {
         let calendar = Calendar.current
         let startYear = calendar.component(.year, from: period.start)
@@ -1952,8 +2371,11 @@ struct SettingsView: View {
                 && subsidy.monthlyApplicationMode == .spreadToDailySalary
                 && subsidy.monthlyProrationMode == .salaryCycleWorkdays
         }
+        let specialRulesNeedHolidayData = config.specialWorkdayRules.contains { rule in
+            rule.enabled && rule.kind == .dayBeforeRestDay
+        }
         guard config.workDayRule == .weekdaysOnly,
-              config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays || subsidyUsesCycleWorkdays else {
+              config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays || subsidyUsesCycleWorkdays || specialRulesNeedHolidayData else {
             return
         }
         holidayManager.ensureYearsLoaded(config.currentSalaryCycleYears)

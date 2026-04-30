@@ -17,6 +17,9 @@ final class SalaryViewModel: ObservableObject {
     @Published var statusText: String = ""
     @Published var earningsPerSecond: Double = 0
     @Published var progress: Double = 0
+    @Published var effectiveDailySalary: Double = 0
+    @Published var effectiveWorkTime: TimeRange = .defaultWorkTime
+    @Published var effectivePaidWorkMinutes: Int = 0
 
     private var timer: Timer?
     private var updateInterval: TimeInterval = 1
@@ -72,11 +75,18 @@ final class SalaryViewModel: ObservableObject {
         let statusText: String
         let earningsPerSecond: Double
         let progress: Double
+        let effectiveDailySalary: Double
+        let effectiveWorkTime: TimeRange
+        let effectivePaidWorkMinutes: Int
     }
 
     private struct WorkWindow {
         let start: Date
         let end: Date
+        let workTime: TimeRange
+        let dailySalary: Double
+        let salaryPerSecond: Double
+        let paidWorkMinutes: Int
     }
 
     /// 只在值实际变化时发布，降低 SwiftUI 重绘频率。
@@ -98,6 +108,15 @@ final class SalaryViewModel: ObservableObject {
         if force || abs(progress - snapshot.progress) > 0.0001 {
             progress = snapshot.progress
         }
+        if force || abs(effectiveDailySalary - snapshot.effectiveDailySalary) > 0.0001 {
+            effectiveDailySalary = snapshot.effectiveDailySalary
+        }
+        if force || effectiveWorkTime != snapshot.effectiveWorkTime {
+            effectiveWorkTime = snapshot.effectiveWorkTime
+        }
+        if force || effectivePaidWorkMinutes != snapshot.effectivePaidWorkMinutes {
+            effectivePaidWorkMinutes = snapshot.effectivePaidWorkMinutes
+        }
     }
 
     /// 生成当前时刻的完整展示快照，是实时刷新链路的核心入口。
@@ -106,13 +125,21 @@ final class SalaryViewModel: ObservableObject {
         let now = Date()
         let calendar = Calendar.current
 
-        guard cfg.workDurationMinutes > 0 else {
+        let fallbackWorkTime = cfg.effectiveWorkTime(on: now, calendar: calendar)
+        let fallbackDailySalary = cfg.effectiveDailySalary(on: now, calendar: calendar)
+        let fallbackPaidWorkMinutes = cfg.paidWorkMinutes(workTime: fallbackWorkTime)
+        let fallbackSalaryPerSecond = cfg.salaryPerSecond(on: now, calendar: calendar)
+
+        guard cfg.workDurationMinutes > 0 || cfg.workDurationMinutes(for: fallbackWorkTime) > 0 else {
             return Snapshot(
                 todayEarnings: 0,
                 status: .dayOff,
                 statusText: "工作时间未设置",
-                earningsPerSecond: cfg.salaryPerSecond,
-                progress: 0
+                earningsPerSecond: fallbackSalaryPerSecond,
+                progress: 0,
+                effectiveDailySalary: fallbackDailySalary,
+                effectiveWorkTime: fallbackWorkTime,
+                effectivePaidWorkMinutes: fallbackPaidWorkMinutes
             )
         }
 
@@ -131,8 +158,11 @@ final class SalaryViewModel: ObservableObject {
                 todayEarnings: 0,
                 status: .dayOff,
                 statusText: "今日休息",
-                earningsPerSecond: cfg.salaryPerSecond,
-                progress: 0
+                earningsPerSecond: fallbackSalaryPerSecond,
+                progress: 0,
+                effectiveDailySalary: fallbackDailySalary,
+                effectiveWorkTime: fallbackWorkTime,
+                effectivePaidWorkMinutes: fallbackPaidWorkMinutes
             )
         }
 
@@ -144,18 +174,24 @@ final class SalaryViewModel: ObservableObject {
                 todayEarnings: 0,
                 status: .notStarted,
                 statusText: h > 0 ? "距上班 \(h)时\(m)分" : "距上班 \(m)分钟",
-                earningsPerSecond: cfg.salaryPerSecond,
-                progress: 0
+                earningsPerSecond: todayWindow.salaryPerSecond,
+                progress: 0,
+                effectiveDailySalary: todayWindow.dailySalary,
+                effectiveWorkTime: todayWindow.workTime,
+                effectivePaidWorkMinutes: todayWindow.paidWorkMinutes
             )
         }
 
         if now >= todayWindow.end {
             return Snapshot(
-                todayEarnings: cfg.dailySalary,
+                todayEarnings: todayWindow.dailySalary,
                 status: .finished,
                 statusText: "今日已收工",
-                earningsPerSecond: cfg.salaryPerSecond,
-                progress: 1.0
+                earningsPerSecond: todayWindow.salaryPerSecond,
+                progress: 1.0,
+                effectiveDailySalary: todayWindow.dailySalary,
+                effectiveWorkTime: todayWindow.workTime,
+                effectivePaidWorkMinutes: todayWindow.paidWorkMinutes
             )
         }
 
@@ -171,8 +207,11 @@ final class SalaryViewModel: ObservableObject {
                 todayEarnings: earnings,
                 status: .onBreak(breakName: breakName),
                 statusText: breakName + "中",
-                earningsPerSecond: cfg.salaryPerSecond,
-                progress: progress
+                earningsPerSecond: window.salaryPerSecond,
+                progress: progress,
+                effectiveDailySalary: window.dailySalary,
+                effectiveWorkTime: window.workTime,
+                effectivePaidWorkMinutes: window.paidWorkMinutes
             )
         }
 
@@ -184,20 +223,33 @@ final class SalaryViewModel: ObservableObject {
             todayEarnings: earnings,
             status: .working,
             statusText: h > 0 ? "距下班 \(h)时\(m)分" : "距下班 \(m)分钟",
-            earningsPerSecond: cfg.salaryPerSecond,
-            progress: progress
+            earningsPerSecond: window.salaryPerSecond,
+            progress: progress,
+            effectiveDailySalary: window.dailySalary,
+            effectiveWorkTime: window.workTime,
+            effectivePaidWorkMinutes: window.paidWorkMinutes
         )
     }
 
     /// 将某个自然日展开成真实工作窗口，跨夜时 end 会落到次日。
     private func makeWorkWindow(startingOn day: Date, calendar: Calendar, config: SalaryConfig) -> WorkWindow? {
-        guard config.workDurationMinutes > 0, shouldCountToday(day, config: config) else { return nil }
+        guard shouldCountToday(day, config: config) else { return nil }
+        let workTime = config.effectiveWorkTime(on: day, calendar: calendar)
+        let workDurationMinutes = config.workDurationMinutes(for: workTime)
+        guard workDurationMinutes > 0 else { return nil }
         let dayStart = calendar.startOfDay(for: day)
-        guard let start = calendar.date(byAdding: .minute, value: config.workTime.startMinutes, to: dayStart),
-              let end = calendar.date(byAdding: .minute, value: config.workTime.startMinutes + config.workDurationMinutes, to: dayStart) else {
+        guard let start = calendar.date(byAdding: .minute, value: workTime.startMinutes, to: dayStart),
+              let end = calendar.date(byAdding: .minute, value: workTime.startMinutes + workDurationMinutes, to: dayStart) else {
             return nil
         }
-        return WorkWindow(start: start, end: end)
+        return WorkWindow(
+            start: start,
+            end: end,
+            workTime: workTime,
+            dailySalary: config.effectiveDailySalary(on: day, calendar: calendar),
+            salaryPerSecond: config.salaryPerSecond(on: day, calendar: calendar),
+            paidWorkMinutes: config.paidWorkMinutes(workTime: workTime)
+        )
     }
 
     private func shouldCountToday(_ date: Date, config: SalaryConfig) -> Bool {
@@ -206,31 +258,31 @@ final class SalaryViewModel: ObservableObject {
 
     private func currentBreakName(now: Date, window: WorkWindow, config: SalaryConfig) -> String? {
         // 当前分钟使用展开后的工作时间轴，跨夜时可能大于 24:00。
-        let currentMinute = config.workTimelineStartMinutes + Int(now.timeIntervalSince(window.start) / 60)
+        let currentMinute = config.workTimelineStartMinutes(for: window.workTime) + Int(now.timeIntervalSince(window.start) / 60)
         if config.usesLunchBreak,
-           config.clampedIntervalsInWorkTime(for: config.lunchBreak).contains(where: { currentMinute >= $0.startMinutes && currentMinute < $0.endMinutes }) {
+           config.clampedIntervalsInWorkTime(for: config.lunchBreak, workTime: window.workTime).contains(where: { currentMinute >= $0.startMinutes && currentMinute < $0.endMinutes }) {
             return "午休"
         }
         if config.dinnerBreakEnabled,
-           config.clampedIntervalsInWorkTime(for: config.dinnerBreak).contains(where: { currentMinute >= $0.startMinutes && currentMinute < $0.endMinutes }) {
+           config.clampedIntervalsInWorkTime(for: config.dinnerBreak, workTime: window.workTime).contains(where: { currentMinute >= $0.startMinutes && currentMinute < $0.endMinutes }) {
             return "晚饭"
         }
         return nil
     }
 
     private func calculateEarningsUpToNow(now: Date, window: WorkWindow, config: SalaryConfig) -> Double {
-        let workDurationSeconds = Double(config.workDurationMinutes) * 60
+        let workDurationSeconds = Double(config.workDurationMinutes(for: window.workTime)) * 60
         let elapsedWorkSeconds = min(max(0, now.timeIntervalSince(window.start)), workDurationSeconds)
 
         if config.countsBreakTimeAsPaidWork {
-            return min(config.dailySalary, max(0, elapsedWorkSeconds * config.salaryPerSecond))
+            return min(window.dailySalary, max(0, elapsedWorkSeconds * window.salaryPerSecond))
         }
 
         var elapsedBreakSeconds: Double = 0
-        for interval in config.breakIntervalsWithinWorkTime {
+        for interval in config.breakIntervalsWithinWorkTime(workTime: window.workTime) {
             // 只扣除“已经发生”的休息时间，避免休息段之后的收入提前被扣完。
-            let breakStart = Double(interval.startMinutes - config.workTimelineStartMinutes) * 60
-            let breakEnd = Double(interval.endMinutes - config.workTimelineStartMinutes) * 60
+            let breakStart = Double(interval.startMinutes - config.workTimelineStartMinutes(for: window.workTime)) * 60
+            let breakEnd = Double(interval.endMinutes - config.workTimelineStartMinutes(for: window.workTime)) * 60
             let overlapStart = max(0, breakStart)
             let overlapEnd = min(elapsedWorkSeconds, breakEnd)
 
@@ -240,7 +292,7 @@ final class SalaryViewModel: ObservableObject {
         }
 
         let paidElapsedSeconds = max(0, elapsedWorkSeconds - elapsedBreakSeconds)
-        return min(config.dailySalary, paidElapsedSeconds * config.salaryPerSecond)
+        return min(window.dailySalary, paidElapsedSeconds * window.salaryPerSecond)
     }
 
     /// 时间进度按完整工作窗口计算，不受休息时间是否计薪影响。
@@ -259,19 +311,19 @@ final class SalaryViewModel: ObservableObject {
     }
 
     var formattedSecondSalary: String {
-        formatMoney(config.salaryPerSecond)
+        formatMoney(earningsPerSecond)
     }
 
     var formattedMinuteSalary: String {
-        formatMoney(config.salaryPerMinute)
+        formatMoney(earningsPerSecond * 60)
     }
 
     var formattedHourlySalary: String {
-        formatMoney(config.salaryPerHour)
+        formatMoney(earningsPerSecond * 3600)
     }
 
     var formattedDailySalary: String {
-        formatMoney(config.dailySalary)
+        formatMoney(effectiveDailySalary)
     }
 
     var formattedMonthlySalary: String {
@@ -280,6 +332,22 @@ final class SalaryViewModel: ObservableObject {
 
     var formattedYearlySalary: String {
         formatMoney(config.yearlySalary)
+    }
+
+    var effectiveWorkTimelineStartMinutes: Int {
+        config.workTimelineStartMinutes(for: effectiveWorkTime)
+    }
+
+    var effectiveWorkTimelineEndMinutes: Int {
+        config.workTimelineEndMinutes(for: effectiveWorkTime)
+    }
+
+    var effectiveWorkDurationMinutes: Int {
+        config.workDurationMinutes(for: effectiveWorkTime)
+    }
+
+    func clampedIntervalsInEffectiveWorkTime(for range: TimeRange) -> [(startMinutes: Int, endMinutes: Int)] {
+        config.clampedIntervalsInWorkTime(for: range, workTime: effectiveWorkTime)
     }
 
     private func formatMoney(_ value: Double, showCurrencySymbol: Bool = true) -> String {

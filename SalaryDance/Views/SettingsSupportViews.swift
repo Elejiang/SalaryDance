@@ -143,6 +143,7 @@ struct SettingsSplitDivider: View {
 struct TimelinePreviewBar: View {
     let config: SalaryConfig
     let progress: Double
+    var workTime: TimeRange? = nil
 
     private struct Segment: Identifiable {
         let id: String
@@ -242,19 +243,20 @@ struct TimelinePreviewBar: View {
 
     /// 生成“上午/午休/下午/晚饭/晚上”等时间段标签。
     private var labelSegments: [Segment] {
-        let workStart = config.workTimelineStartMinutes
-        let workEnd = config.workTimelineEndMinutes
-        let duration = config.workDurationMinutes
+        let activeWorkTime = workTime ?? config.workTime
+        let workStart = config.workTimelineStartMinutes(for: activeWorkTime)
+        let workEnd = config.workTimelineEndMinutes(for: activeWorkTime)
+        let duration = config.workDurationMinutes(for: activeWorkTime)
         guard duration > 0 else { return [] }
 
         var breaks: [(id: String, title: String, start: Int, end: Int, color: Color)] = []
         if config.usesLunchBreak {
-            breaks.append(contentsOf: config.clampedIntervalsInWorkTime(for: config.lunchBreak).enumerated().map { index, interval in
+            breaks.append(contentsOf: config.clampedIntervalsInWorkTime(for: config.lunchBreak, workTime: activeWorkTime).enumerated().map { index, interval in
                 ("lunch-\(index)", "午休", interval.startMinutes, interval.endMinutes, Color(nsColor: config.lunchBreakNSColor))
             })
         }
         if config.dinnerBreakEnabled {
-            breaks.append(contentsOf: config.clampedIntervalsInWorkTime(for: config.dinnerBreak).enumerated().map { index, interval in
+            breaks.append(contentsOf: config.clampedIntervalsInWorkTime(for: config.dinnerBreak, workTime: activeWorkTime).enumerated().map { index, interval in
                 ("dinner-\(index)", "晚饭", interval.startMinutes, interval.endMinutes, Color(nsColor: config.dinnerBreakNSColor))
             })
         }
@@ -308,9 +310,10 @@ struct TimelinePreviewBar: View {
 
     /// 网格点使用展开后的工作时间轴，跨夜时仍按连续分钟计算。
     private var gridTicks: [Double] {
-        let workStart = config.workTimelineStartMinutes
-        let workEnd = config.workTimelineEndMinutes
-        let duration = config.workDurationMinutes
+        let activeWorkTime = workTime ?? config.workTime
+        let workStart = config.workTimelineStartMinutes(for: activeWorkTime)
+        let workEnd = config.workTimelineEndMinutes(for: activeWorkTime)
+        let duration = config.workDurationMinutes(for: activeWorkTime)
         guard config.workProgressDisplaysGrid, duration > 0 else { return [] }
 
         var result: [Double] = []
@@ -323,10 +326,11 @@ struct TimelinePreviewBar: View {
     }
 
     private func makeSegments(id: String, title: String, range: TimeRange, color: Color) -> [Segment] {
-        let workStart = config.workTimelineStartMinutes
-        let duration = config.workDurationMinutes
+        let activeWorkTime = workTime ?? config.workTime
+        let workStart = config.workTimelineStartMinutes(for: activeWorkTime)
+        let duration = config.workDurationMinutes(for: activeWorkTime)
         guard duration > 0 else { return [] }
-        return config.clampedIntervalsInWorkTime(for: range).enumerated().map { index, interval in
+        return config.clampedIntervalsInWorkTime(for: range, workTime: activeWorkTime).enumerated().map { index, interval in
             makeSegment(
                 id: "\(id)-\(index)",
                 title: title,

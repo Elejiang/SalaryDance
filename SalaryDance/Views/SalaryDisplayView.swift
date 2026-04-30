@@ -306,9 +306,9 @@ struct SalaryDisplayView: View {
                     }
 
                     HStack {
-                        Text(viewModel.config.workTime.startString)
+                        Text(viewModel.effectiveWorkTime.startString)
                         Spacer()
-                        Text(viewModel.config.workTime.endString)
+                        Text(viewModel.effectiveWorkTime.endString)
                     }
                     .font(.system(size: 9, weight: .medium, design: .rounded))
                     .foregroundColor(.secondary.opacity(0.75))
@@ -391,9 +391,9 @@ struct SalaryDisplayView: View {
         let config = viewModel.config
         guard config.workProgressDisplaysGrid else { return [] }
 
-        let workStart = config.workTimelineStartMinutes
-        let workEnd = config.workTimelineEndMinutes
-        let workDuration = config.workDurationMinutes
+        let workStart = viewModel.effectiveWorkTimelineStartMinutes
+        let workEnd = viewModel.effectiveWorkTimelineEndMinutes
+        let workDuration = viewModel.effectiveWorkDurationMinutes
         let interval = config.workProgressGridIntervalMinutes
         guard workDuration > 0, interval > 0 else { return [] }
 
@@ -413,14 +413,13 @@ struct SalaryDisplayView: View {
 
     /// 标签开关由面板统一控制，这里只负责提供可绘制片段。
     private var progressLabelSegments: [TimelineLabelSegment] {
-        timelineLabelSegments(config: viewModel.config)
+        timelineLabelSegments()
     }
 
     /// 把一个休息时间段裁剪到工作窗口内，返回可直接映射到时间轴宽度的片段。
     private func makeBreakSegments(id: String, name: String, range: TimeRange, tint: Color) -> [BreakSegment] {
-        let config = viewModel.config
-        let workStart = config.workTimelineStartMinutes
-        let workDuration = config.workDurationMinutes
+        let workStart = viewModel.effectiveWorkTimelineStartMinutes
+        let workDuration = viewModel.effectiveWorkDurationMinutes
         guard workDuration > 0 else { return [] }
 
         let isActive: Bool
@@ -430,7 +429,7 @@ struct SalaryDisplayView: View {
             isActive = false
         }
 
-        return config.clampedIntervalsInWorkTime(for: range).enumerated().map { index, interval in
+        return viewModel.clampedIntervalsInEffectiveWorkTime(for: range).enumerated().map { index, interval in
             BreakSegment(
                 id: "\(id)-\(index)",
                 name: name,
@@ -443,17 +442,18 @@ struct SalaryDisplayView: View {
     }
 
     /// 生成时间轴标签：休息段插入工作段中，过短片段会被过滤，避免小弹窗里文字重叠。
-    private func timelineLabelSegments(config: SalaryConfig) -> [TimelineLabelSegment] {
-        let workStart = config.workTimelineStartMinutes
-        let workEnd = config.workTimelineEndMinutes
-        let workDuration = config.workDurationMinutes
+    private func timelineLabelSegments() -> [TimelineLabelSegment] {
+        let config = viewModel.config
+        let workStart = viewModel.effectiveWorkTimelineStartMinutes
+        let workEnd = viewModel.effectiveWorkTimelineEndMinutes
+        let workDuration = viewModel.effectiveWorkDurationMinutes
         guard workDuration > 0 else { return [] }
 
         var breaks: [(id: String, title: String, start: Int, end: Int, tint: Color)] = []
 
         // 休息时间可能跨夜或被工作时间裁掉，先统一转成工作窗口内的片段。
         func appendBreak(id: String, title: String, range: TimeRange, tint: Color) {
-            for (index, interval) in config.clampedIntervalsInWorkTime(for: range).enumerated() {
+            for (index, interval) in viewModel.clampedIntervalsInEffectiveWorkTime(for: range).enumerated() {
                 breaks.append(("\(id)-\(index)", title, interval.startMinutes, interval.endMinutes, tint))
             }
         }

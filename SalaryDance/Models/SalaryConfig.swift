@@ -60,6 +60,41 @@ enum WorkDayRule: String, Codable, CaseIterable {
     }
 }
 
+/// 特殊工作日的命中条件。规则只覆盖当天上下班时间，不改变当天是否计薪。
+enum SpecialWorkdayRuleKind: String, Codable, CaseIterable, Identifiable {
+    case dayBeforeRestDay
+    case weekly
+    case intervalWeeks
+    case exactDate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .dayBeforeRestDay: return "节假日和周末的前一天"
+        case .weekly: return "固定星期"
+        case .intervalWeeks: return "隔周循环"
+        case .exactDate: return "指定日期"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.dayBeforeRestDay.rawValue, "休息日前一天", "节假日和周末的前一天":
+            self = .dayBeforeRestDay
+        case Self.weekly.rawValue, "固定星期":
+            self = .weekly
+        case Self.intervalWeeks.rawValue, "隔周循环":
+            self = .intervalWeeks
+        case Self.exactDate.rawValue, "指定日期":
+            self = .exactDate
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown SpecialWorkdayRuleKind: \(value)"))
+        }
+    }
+}
+
 /// 月薪和日薪互相折算时使用的计薪日来源。
 enum MonthlySalaryCalculationMode: String, Codable, CaseIterable, Identifiable {
     case fixedAverage
@@ -331,6 +366,7 @@ struct TimeRange: Codable, Equatable {
     }
 
     static let defaultWorkTime = TimeRange(startHour: 10, startMinute: 0, endHour: 21, endMinute: 0)
+    static let defaultSpecialWorkdayTime = TimeRange(startHour: 10, startMinute: 0, endHour: 18, endMinute: 0)
     static let defaultLunchBreak = TimeRange(startHour: 12, startMinute: 0, endHour: 14, endMinute: 0)
     static let defaultDinnerBreak = TimeRange(startHour: 18, startMinute: 0, endHour: 19, endMinute: 0)
 
@@ -343,6 +379,67 @@ struct TimeRange: Codable, Equatable {
 
     private static func clamped(_ value: Int, in range: ClosedRange<Int>) -> Int {
         min(range.upperBound, max(range.lowerBound, value))
+    }
+}
+
+/// 单条特殊工作日规则。数组顺序就是优先级，第一条启用且命中的规则生效。
+struct SpecialWorkdayRule: Codable, Equatable, Identifiable {
+    static let intervalWeeksRange = 1...12
+
+    var id: UUID = UUID()
+    var enabled: Bool = true
+    var name: String = "特殊工作日"
+    var kind: SpecialWorkdayRuleKind = .dayBeforeRestDay
+    var weekdays: Set<Int> = [5]
+    var intervalWeeks: Int = 2
+    var anchorDate: Date = Calendar.current.startOfDay(for: Date())
+    var exactDate: Date = Calendar.current.startOfDay(for: Date())
+    var workTime: TimeRange = .defaultSpecialWorkdayTime
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case enabled
+        case name
+        case kind
+        case weekdays
+        case intervalWeeks
+        case anchorDate
+        case exactDate
+        case workTime
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = SpecialWorkdayRule()
+
+        id = container.decodeLossy(UUID.self, forKey: .id, default: defaults.id)
+        enabled = container.decodeLossy(Bool.self, forKey: .enabled, default: defaults.enabled)
+        name = container.decodeLossy(String.self, forKey: .name, default: defaults.name)
+        kind = container.decodeLossy(SpecialWorkdayRuleKind.self, forKey: .kind, default: defaults.kind)
+        weekdays = container.decodeLossy(Set<Int>.self, forKey: .weekdays, default: defaults.weekdays)
+        intervalWeeks = container.decodeLossy(Int.self, forKey: .intervalWeeks, default: defaults.intervalWeeks)
+        anchorDate = container.decodeLossy(Date.self, forKey: .anchorDate, default: defaults.anchorDate)
+        exactDate = container.decodeLossy(Date.self, forKey: .exactDate, default: defaults.exactDate)
+        workTime = container.decodeLossy(TimeRange.self, forKey: .workTime, default: defaults.workTime)
+    }
+
+    var displayName: String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "特殊工作日" : trimmed
+    }
+
+    mutating func normalize(calendar: Calendar = .current) {
+        name = String(name.prefix(24))
+        weekdays = Set(weekdays.filter { (1...7).contains($0) })
+        if weekdays.isEmpty {
+            weekdays = [5]
+        }
+        intervalWeeks = min(Self.intervalWeeksRange.upperBound, max(Self.intervalWeeksRange.lowerBound, intervalWeeks))
+        anchorDate = calendar.startOfDay(for: anchorDate)
+        exactDate = calendar.startOfDay(for: exactDate)
+        workTime.normalizeClockFields()
     }
 }
 
@@ -462,6 +559,7 @@ struct SalaryConfig: Codable, Equatable {
     var dinnerBreak: TimeRange = .defaultDinnerBreak
     var workDayRule: WorkDayRule = .weekdaysOnly
     var customWorkDays: Set<Int> = [1, 3, 4, 5]
+    var specialWorkdayRules: [SpecialWorkdayRule] = []
     var launchAtLogin: Bool = false
     var shortcutModifiers: Int = Self.defaultShortcutModifiers
     var shortcutKeyCode: UInt16 = ShortcutKey.defaultKeyCode
@@ -516,6 +614,7 @@ struct SalaryConfig: Codable, Equatable {
         case dinnerBreak
         case workDayRule
         case customWorkDays
+        case specialWorkdayRules
         case launchAtLogin
         case shortcutModifiers
         case shortcutKeyCode
@@ -575,6 +674,7 @@ struct SalaryConfig: Codable, Equatable {
         dinnerBreak = container.decodeLossy(TimeRange.self, forKey: .dinnerBreak, default: defaults.dinnerBreak)
         workDayRule = container.decodeLossy(WorkDayRule.self, forKey: .workDayRule, default: defaults.workDayRule)
         customWorkDays = container.decodeLossy(Set<Int>.self, forKey: .customWorkDays, default: defaults.customWorkDays)
+        specialWorkdayRules = container.decodeLossy([SpecialWorkdayRule].self, forKey: .specialWorkdayRules, default: defaults.specialWorkdayRules)
         launchAtLogin = container.decodeLossy(Bool.self, forKey: .launchAtLogin, default: defaults.launchAtLogin)
         shortcutModifiers = container.decodeLossy(Int.self, forKey: .shortcutModifiers, default: defaults.shortcutModifiers)
         shortcutKeyCode = container.decodeLossy(UInt16.self, forKey: .shortcutKeyCode, default: defaults.shortcutKeyCode)
@@ -937,15 +1037,65 @@ struct SalaryConfig: Codable, Equatable {
     }
 
     var workTimelineStartMinutes: Int {
-        workTime.startMinutes
+        workTimelineStartMinutes(for: workTime)
     }
 
     var workTimelineEndMinutes: Int {
-        workTime.startMinutes + workTime.durationMinutes
+        workTimelineEndMinutes(for: workTime)
     }
 
     var workDurationMinutes: Int {
+        workDurationMinutes(for: workTime)
+    }
+
+    func workTimelineStartMinutes(for workTime: TimeRange) -> Int {
+        workTime.startMinutes
+    }
+
+    func workTimelineEndMinutes(for workTime: TimeRange) -> Int {
+        workTime.startMinutes + workTime.durationMinutes
+    }
+
+    func workDurationMinutes(for workTime: TimeRange) -> Int {
         workTime.durationMinutes
+    }
+
+    /// 特殊工作日只覆盖命中当天的上下班时间，休息、补贴和月薪/年薪折算仍沿用基础配置。
+    func effectiveWorkTime(on date: Date, calendar: Calendar = .current) -> TimeRange {
+        guard let rule = matchingSpecialWorkdayRule(on: date, calendar: calendar),
+              rule.workTime.durationMinutes > 0 else {
+            return workTime
+        }
+        return rule.workTime
+    }
+
+    func effectiveDailySalary(on date: Date, calendar: Calendar = .current) -> Double {
+        dailySalary
+    }
+
+    func salaryPerSecond(on date: Date, calendar: Calendar = .current) -> Double {
+        salaryPerSecond(workTime: effectiveWorkTime(on: date, calendar: calendar))
+    }
+
+    func salaryPerMinute(on date: Date, calendar: Calendar = .current) -> Double {
+        salaryPerSecond(on: date, calendar: calendar) * 60
+    }
+
+    func salaryPerHour(on date: Date, calendar: Calendar = .current) -> Double {
+        salaryPerSecond(on: date, calendar: calendar) * 3600
+    }
+
+    func paidWorkMinutes(on date: Date, calendar: Calendar = .current) -> Int {
+        paidWorkMinutes(workTime: effectiveWorkTime(on: date, calendar: calendar))
+    }
+
+    func matchingSpecialWorkdayRule(on date: Date, calendar: Calendar = .current) -> SpecialWorkdayRule? {
+        let day = calendar.startOfDay(for: date)
+        guard shouldCountSalary(on: day, calendar: calendar) else { return nil }
+
+        return specialWorkdayRules.first { rule in
+            rule.enabled && specialWorkdayRule(rule, matches: day, calendar: calendar)
+        }
     }
 
     /// 返回指定日期所在的薪资周期，支持每月非 1 号起算和 2 月短月兜底。
@@ -984,9 +1134,44 @@ struct SalaryConfig: Codable, Equatable {
         }
     }
 
+    private func specialWorkdayRule(_ rule: SpecialWorkdayRule, matches day: Date, calendar: Calendar) -> Bool {
+        switch rule.kind {
+        case .dayBeforeRestDay:
+            guard let nextDay = calendar.date(byAdding: .day, value: 1, to: day) else { return false }
+            return !shouldCountSalary(on: nextDay, calendar: calendar)
+        case .weekly:
+            return rule.weekdays.contains(mappedWeekday(for: day, calendar: calendar))
+        case .intervalWeeks:
+            guard rule.weekdays.contains(mappedWeekday(for: day, calendar: calendar)) else { return false }
+            let interval = min(SpecialWorkdayRule.intervalWeeksRange.upperBound, max(SpecialWorkdayRule.intervalWeeksRange.lowerBound, rule.intervalWeeks))
+            let dateWeekStart = weekStart(containing: day, calendar: calendar)
+            let anchorWeekStart = weekStart(containing: rule.anchorDate, calendar: calendar)
+            let dayDelta = calendar.dateComponents([.day], from: anchorWeekStart, to: dateWeekStart).day ?? 0
+            guard dayDelta % 7 == 0 else { return false }
+            return (dayDelta / 7) % interval == 0
+        case .exactDate:
+            return calendar.isDate(day, inSameDayAs: rule.exactDate)
+        }
+    }
+
+    private func mappedWeekday(for date: Date, calendar: Calendar) -> Int {
+        let weekday = calendar.component(.weekday, from: date)
+        return weekday == 1 ? 7 : weekday - 1
+    }
+
+    private func weekStart(containing date: Date, calendar: Calendar) -> Date {
+        let day = calendar.startOfDay(for: date)
+        let weekday = mappedWeekday(for: day, calendar: calendar)
+        return calendar.date(byAdding: .day, value: 1 - weekday, to: day) ?? day
+    }
+
     func clampedIntervalsInWorkTime(for range: TimeRange) -> [(startMinutes: Int, endMinutes: Int)] {
-        let workStart = workTimelineStartMinutes
-        let workEnd = workTimelineEndMinutes
+        clampedIntervalsInWorkTime(for: range, workTime: workTime)
+    }
+
+    func clampedIntervalsInWorkTime(for range: TimeRange, workTime: TimeRange) -> [(startMinutes: Int, endMinutes: Int)] {
+        let workStart = workTimelineStartMinutes(for: workTime)
+        let workEnd = workTimelineEndMinutes(for: workTime)
         let rangeDuration = range.durationMinutes
         guard workEnd > workStart, rangeDuration > 0 else { return [] }
 
@@ -1003,15 +1188,19 @@ struct SalaryConfig: Codable, Equatable {
 
     /// 工作窗口内实际生效的休息时间，已经裁剪到工作时间范围并合并重叠段。
     var breakIntervalsWithinWorkTime: [(startMinutes: Int, endMinutes: Int)] {
-        guard workDurationMinutes > 0 else { return [] }
+        breakIntervalsWithinWorkTime(workTime: workTime)
+    }
+
+    func breakIntervalsWithinWorkTime(workTime: TimeRange) -> [(startMinutes: Int, endMinutes: Int)] {
+        guard workDurationMinutes(for: workTime) > 0 else { return [] }
 
         var intervals: [(startMinutes: Int, endMinutes: Int)] = []
 
         if usesLunchBreak {
-            intervals.append(contentsOf: clampedIntervalsInWorkTime(for: lunchBreak))
+            intervals.append(contentsOf: clampedIntervalsInWorkTime(for: lunchBreak, workTime: workTime))
         }
         if dinnerBreakEnabled {
-            intervals.append(contentsOf: clampedIntervalsInWorkTime(for: dinnerBreak))
+            intervals.append(contentsOf: clampedIntervalsInWorkTime(for: dinnerBreak, workTime: workTime))
         }
 
         let sorted = intervals.sorted { $0.startMinutes < $1.startMinutes }
@@ -1034,23 +1223,39 @@ struct SalaryConfig: Codable, Equatable {
     }
 
     var breakMinutesWithinWorkTime: Int {
-        breakIntervalsWithinWorkTime.reduce(0) { total, interval in
+        breakMinutesWithinWorkTime(workTime: workTime)
+    }
+
+    func breakMinutesWithinWorkTime(workTime: TimeRange) -> Int {
+        breakIntervalsWithinWorkTime(workTime: workTime).reduce(0) { total, interval in
             total + interval.endMinutes - interval.startMinutes
         }
     }
 
     var workMinutesExcludingBreaks: Int {
-        max(0, workDurationMinutes - breakMinutesWithinWorkTime)
+        workMinutesExcludingBreaks(workTime: workTime)
+    }
+
+    func workMinutesExcludingBreaks(workTime: TimeRange) -> Int {
+        max(0, workDurationMinutes(for: workTime) - breakMinutesWithinWorkTime(workTime: workTime))
     }
 
     var paidWorkMinutes: Int {
+        paidWorkMinutes(workTime: workTime)
+    }
+
+    func paidWorkMinutes(workTime: TimeRange) -> Int {
         countsBreakTimeAsPaidWork
-            ? max(0, workDurationMinutes)
-            : workMinutesExcludingBreaks
+            ? max(0, workDurationMinutes(for: workTime))
+            : workMinutesExcludingBreaks(workTime: workTime)
     }
 
     var salaryPerSecond: Double {
-        let workSeconds = Double(paidWorkMinutes) * 60
+        salaryPerSecond(workTime: workTime)
+    }
+
+    private func salaryPerSecond(workTime: TimeRange) -> Double {
+        let workSeconds = Double(paidWorkMinutes(workTime: workTime)) * 60
         guard workSeconds > 0 else { return 0 }
         return dailySalary / workSeconds
     }
@@ -1071,6 +1276,11 @@ struct SalaryConfig: Codable, Equatable {
         lunchBreak.normalizeClockFields()
         dinnerBreak.normalizeClockFields()
         customWorkDays = Set(customWorkDays.filter { (1...7).contains($0) })
+        specialWorkdayRules = specialWorkdayRules.map { rule in
+            var normalized = rule
+            normalized.normalize()
+            return normalized
+        }
         fixedMonthlyWorkdays = min(Self.monthlyWorkdaysRange.upperBound, max(Self.monthlyWorkdaysRange.lowerBound, fixedMonthlyWorkdays.isFinite ? fixedMonthlyWorkdays : Self.averageMonthlyWorkDays))
         monthlySalaryCycleStartDay = min(31, max(1, monthlySalaryCycleStartDay))
         shortcutModifiers = Int(shortcutModifierFlags.rawValue)
