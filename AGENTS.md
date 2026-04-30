@@ -25,7 +25,6 @@
 
 ## 操作红线
 
-- 配置模型以现行结构为准，不维护历史字段迁移；不兼容变更通过重置本地配置处理。
 - 仓库只提交源码、脚本和文档，排除 `build/`、`dist/`、`.DS_Store`、`xcuserdata/`、DerivedData 等本地产物。
 - 新增 Swift 文件必须同步加入 `SalaryDance.xcodeproj/project.pbxproj`。
 
@@ -39,7 +38,7 @@
 
 ## Git 提交规范
 
-提交信息格式使用 `<type>: <subject>`，例如 `feat: v1.0`。
+只有用户明确说“提交git记录”，才进行git记录提交，提交信息格式使用 `<type>: <subject>`，例如 `feat: v1.0`。默认采用中文。
 
 | type | 含义 | 使用场景 |
 |------|------|----------|
