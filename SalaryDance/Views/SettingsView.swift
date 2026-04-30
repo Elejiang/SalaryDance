@@ -5,6 +5,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
     case salary
     case time
     case display
+    case offTask
     case shortcut
     case calendar
     case app
@@ -16,6 +17,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .salary: return "薪资"
         case .time: return "时间"
         case .display: return "展示"
+        case .offTask: return "摸鱼"
         case .shortcut: return "快捷键"
         case .calendar: return "日历"
         case .app: return "应用"
@@ -27,6 +29,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .salary: return "输入薪资、补贴和金额精度"
         case .time: return "工作时段、休息和计薪时长"
         case .display: return "状态栏、弹窗和时间轴"
+        case .offTask: return "今日统计和历史记录"
         case .shortcut: return "快捷键录制和动作顺序"
         case .calendar: return "计薪规则、节假日和调休日"
         case .app: return "启动和刷新策略"
@@ -38,6 +41,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .salary: return "yensign.circle"
         case .time: return "clock"
         case .display: return "menubar.rectangle"
+        case .offTask: return "chart.bar"
         case .shortcut: return "keyboard"
         case .calendar: return "calendar"
         case .app: return "gearshape"
@@ -83,11 +87,314 @@ private struct SubsidyStatusToggleStyle: ToggleStyle {
     }
 }
 
+private struct OffTaskHistoryYear: Identifiable {
+    let id: String
+    let title: String
+    let months: [OffTaskHistoryMonth]
+    let paidSeconds: TimeInterval
+    let amount: Double
+    let recordCount: Int
+    let dayCount: Int
+}
+
+private struct OffTaskHistoryMonth: Identifiable {
+    let id: String
+    let title: String
+    let days: [OffTaskHistoryDay]
+    let paidSeconds: TimeInterval
+    let amount: Double
+    let recordCount: Int
+}
+
+private struct OffTaskHistoryDay: Identifiable {
+    let id: String
+    let title: String
+    let summaries: [OffTaskSessionSummary]
+    let paidSeconds: TimeInterval
+    let amount: Double
+}
+
+private struct OffTaskDisplayPeriod: Identifiable {
+    let id: String
+    let title: String
+    let rangeText: String
+    let summary: OffTaskAggregateSummary
+}
+
+private struct SecondPrecisionDateTimePicker: View {
+    let title: String
+    @Binding var date: Date
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .frame(width: 42, alignment: .leading)
+
+            DatePicker("", selection: $date, displayedComponents: .date)
+                .labelsHidden()
+                .frame(width: 130)
+
+            timeStepper(component: .hour, range: 0...23, suffix: "时")
+            timeStepper(component: .minute, range: 0...59, suffix: "分")
+            timeStepper(component: .second, range: 0...59, suffix: "秒")
+        }
+        .controlSize(.small)
+    }
+
+    private func timeStepper(component: Calendar.Component, range: ClosedRange<Int>, suffix: String) -> some View {
+        Stepper(value: componentBinding(component), in: range) {
+            Text("\(componentValue(component))\(suffix)")
+                .font(.caption.monospacedDigit())
+                .frame(width: 42, alignment: .leading)
+        }
+        .frame(width: 82)
+    }
+
+    private func componentBinding(_ component: Calendar.Component) -> Binding<Int> {
+        Binding(
+            get: { componentValue(component) },
+            set: { newValue in
+                var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+                switch component {
+                case .hour:
+                    components.hour = newValue
+                case .minute:
+                    components.minute = newValue
+                case .second:
+                    components.second = newValue
+                default:
+                    break
+                }
+                date = Calendar.current.date(from: components) ?? date
+            }
+        )
+    }
+
+    private func componentValue(_ component: Calendar.Component) -> Int {
+        Calendar.current.component(component, from: date)
+    }
+}
+
+private struct OffTaskSessionRowView: View {
+    let summary: OffTaskSessionSummary
+    let config: SalaryConfig
+    @ObservedObject private var tracker = OffTaskTracker.shared
+    @State private var isEditing = false
+    @State private var startDate = Date()
+    @State private var endDate = Date()
+    @State private var validationMessage: String?
+    @State private var showsDeleteAlert = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isEditing {
+                editContent
+            } else {
+                readOnlyContent
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.34), lineWidth: 1)
+        )
+        .onAppear(perform: resetEditingDates)
+        .onChange(of: summary.session) { _, _ in
+            if !isEditing {
+                resetEditingDates()
+            }
+        }
+        .alert("删除这条记录？", isPresented: $showsDeleteAlert) {
+            Button("删除", role: .destructive) {
+                tracker.deleteSession(id: summary.id)
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除后无法恢复，本条记录对应的摸鱼薪资和时长会立即从统计中移除。")
+        }
+    }
+
+    private var readOnlyContent: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(formatRange(summary.session))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                if !Calendar.current.isDate(summary.session.start, inSameDayAs: summary.workday) {
+                    Text(formatDate(summary.session.start))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundColor(.secondary)
+                }
+            }
+            .foregroundColor(.primary)
+            .frame(width: 132, alignment: .leading)
+
+            Text(formatDuration(summary.paidSeconds))
+                .font(.caption.monospacedDigit())
+                .foregroundColor(.primary)
+                .frame(width: 76, alignment: .leading)
+
+            Text(formatMoney(summary.amount))
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .frame(width: 86, alignment: .leading)
+
+            Group {
+                if summary.isActive {
+                    Label("进行中", systemImage: "record.circle")
+                        .foregroundColor(.orange)
+                } else {
+                    Text("已结束")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .font(.caption)
+            .frame(width: 64, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            Button("编辑") {
+                resetEditingDates()
+                isEditing = true
+            }
+            .controlSize(.small)
+            .help(summary.isActive ? "编辑进行中记录的开始时间" : "编辑开始和结束时间")
+
+            Button(role: .destructive) {
+                showsDeleteAlert = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("删除记录")
+        }
+    }
+
+    private var editContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SecondPrecisionDateTimePicker(title: "开始", date: $startDate)
+
+            if summary.isActive {
+                Label("进行中的记录会保持开启，只调整开始时间。", systemImage: "record.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                SecondPrecisionDateTimePicker(title: "结束", date: $endDate)
+            }
+
+            if let validationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            HStack {
+                Text(summary.isActive ? "今日金额和计薪时长会按新的开始时间实时重算。" : "金额和计薪时长会按修改后的时间范围实时重算。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("取消") {
+                    validationMessage = nil
+                    isEditing = false
+                    resetEditingDates()
+                }
+                .controlSize(.small)
+
+                Button("保存") {
+                    save()
+                }
+                .keyboardShortcut(.defaultAction)
+                .controlSize(.small)
+            }
+        }
+    }
+
+    private func save() {
+        let updatedEnd = summary.isActive ? nil : endDate
+        if summary.isActive {
+            guard startDate < Date() else {
+                validationMessage = "开始时间必须早于当前时间"
+                return
+            }
+            guard let activeWindow = SalaryWorkTimeline.activeWindow(containing: Date(), config: config),
+                  startDate >= activeWindow.start,
+                  startDate < activeWindow.end else {
+                validationMessage = "开始时间必须在当前工作窗口内"
+                return
+            }
+        } else {
+            guard endDate > startDate else {
+                validationMessage = "结束时间必须晚于开始时间"
+                return
+            }
+        }
+
+        guard tracker.updateSessionTimeRange(id: summary.id, start: startDate, end: updatedEnd) else {
+            validationMessage = "保存失败，请检查时间范围"
+            return
+        }
+
+        validationMessage = nil
+        isEditing = false
+    }
+
+    private func resetEditingDates() {
+        startDate = summary.session.start
+        endDate = summary.session.end ?? Date()
+    }
+
+    private func formatRange(_ session: OffTaskSession) -> String {
+        let endText = session.end.map(formatTime) ?? "进行中"
+        return "\(formatTime(session.start)) - \(endText)"
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年MM月dd日 E"
+        return formatter.string(from: date)
+    }
+
+    private func formatTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return "\(hours)时\(minutes)分\(seconds)秒"
+        }
+        if minutes > 0 {
+            return "\(minutes)分\(seconds)秒"
+        }
+        return "\(seconds)秒"
+    }
+
+    private func formatMoney(_ value: Double) -> String {
+        let amount = String(format: "%.\(config.displayDecimalPlaces)f", value)
+        return "¥\(amount)"
+    }
+}
+
 /// 设置窗口主体。当前采用“左侧分类 + 右侧预加载页面”的结构，减少栏目切换时的重新创建成本。
 struct SettingsView: View {
     @ObservedObject var configManager = SalaryConfigManager.shared
     @ObservedObject var holidayManager = ChineseHolidays.shared
     @ObservedObject var shortcutMonitor = GlobalShortcutMonitor.shared
+    @ObservedObject var offTaskTracker = OffTaskTracker.shared
     @State private var tempSalaryAmount: String = ""
     @State private var refreshIntervalText: String = ""
     @State private var fixedMonthlyWorkdaysText: String = ""
@@ -99,7 +406,11 @@ struct SettingsView: View {
     @FocusState private var isSalaryCycleStartDayFocused: Bool
     @AppStorage("settings_sidebar_width") private var storedSidebarWidth: Double = 218
     @State private var sidebarWidth: Double = 218
+    @State private var expandedOffTaskHistoryYears: Set<String> = []
+    @State private var expandedOffTaskHistoryMonths: Set<String> = []
+    @State private var expandedOffTaskHistoryDays: Set<String> = []
     private let sidebarWidthRange: ClosedRange<Double> = 168...310
+    private static let settingsPageContentPadding: CGFloat = 24
 
     /// 侧边栏宽度拖动时只更新内存状态，拖动结束后再持久化，避免 UserDefaults 连续写入导致抖动。
     var body: some View {
@@ -265,7 +576,7 @@ struct SettingsView: View {
                 settingsHeader(for: category)
                 settingsContent(for: category)
             }
-            .padding(24)
+            .padding(Self.settingsPageContentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -281,6 +592,8 @@ struct SettingsView: View {
             breakSection
         case .display:
             displaySettingsContent
+        case .offTask:
+            offTaskStatsSection
         case .shortcut:
             shortcutSettingsSection
         case .calendar:
@@ -355,13 +668,86 @@ struct SettingsView: View {
         }
     }
 
-    /// 月薪折算支持固定指定天数和按当前薪资周期动态计薪日两种模式。
+    /// 月薪配置拆成“周期范围”和“计薪方式”两步；周期影响归属范围，计薪方式影响折算分母。
     private var monthlySalaryCalculationSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Divider()
 
             HStack {
-                Text("月薪折算")
+                Text("计薪周期")
+                    .frame(width: 80, alignment: .leading)
+                Picker("", selection: Binding(
+                    get: { configManager.config.resolvedSalaryCycleMode },
+                    set: { newValue in
+                        configManager.config.salaryCycleMode = newValue
+                        ensureSalaryCycleHolidayData()
+                    }
+                )) {
+                    ForEach(SalaryCycleMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                Spacer()
+            }
+
+            if configManager.config.resolvedSalaryCycleMode == .fixedMonthlyCycle {
+                HStack {
+                    Text("周期起始")
+                        .frame(width: 80, alignment: .leading)
+                    TextField("", text: $salaryCycleStartDayText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                        .monospacedDigit()
+                        .multilineTextAlignment(.trailing)
+                        .focused($isSalaryCycleStartDayFocused)
+                        .frame(width: 46)
+                        .onSubmit {
+                            commitSalaryCycleStartDayText()
+                        }
+                        .onChange(of: salaryCycleStartDayText) { _, newValue in
+                            sanitizeSalaryCycleStartDayText(newValue)
+                        }
+                    Text("日")
+                        .foregroundColor(.secondary)
+
+                    Stepper("", value: Binding(
+                        get: { configManager.config.resolvedMonthlySalaryCycleStartDay },
+                        set: { newValue in
+                            setSalaryCycleStartDay(newValue)
+                        }
+                    ), in: 1...31)
+                    .labelsHidden()
+                    .frame(width: 44)
+
+                    Text("每月 \(configManager.config.resolvedMonthlySalaryCycleStartDay) 日到次月前一日")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .monospacedDigit()
+                    Spacer()
+                }
+            }
+
+            let period = configManager.config.currentSalaryCyclePeriod
+            HStack(spacing: 8) {
+                Image(systemName: "calendar.badge.clock")
+                    .foregroundColor(.secondary)
+                Text("当前周期 \(formatSalaryCyclePeriod(period))，共 \(period.totalDays) 天，计薪 \(period.paidWorkdays) 天")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .monospacedDigit()
+            }
+
+            Text(configManager.config.resolvedSalaryCycleMode == .naturalMonth ? "自然月周期按每月 1 日到当月最后一天归属。" : "固定周期按指定日期起算；当月没有对应日期时，按当月最后一天作为周期起点。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            HStack {
+                Text("计薪方式")
                     .frame(width: 80, alignment: .leading)
                 Picker("", selection: Binding(
                     get: { configManager.config.resolvedMonthlySalaryCalculationMode },
@@ -430,58 +816,12 @@ struct SettingsView: View {
                     Spacer()
                 }
 
-                Text("固定模式始终用这个天数做月薪和日薪换算，不随自然月或薪资周期变化。")
+                Text("固定天数只决定月薪和日薪折算，不改变上面的计薪周期范围。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if configManager.config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays {
-                HStack {
-                    Text("周期起始")
-                        .frame(width: 80, alignment: .leading)
-                    TextField("", text: $salaryCycleStartDayText)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                        .monospacedDigit()
-                        .multilineTextAlignment(.trailing)
-                        .focused($isSalaryCycleStartDayFocused)
-                        .frame(width: 46)
-                        .onSubmit {
-                            commitSalaryCycleStartDayText()
-                        }
-                        .onChange(of: salaryCycleStartDayText) { _, newValue in
-                            sanitizeSalaryCycleStartDayText(newValue)
-                        }
-                    Text("日")
-                        .foregroundColor(.secondary)
-
-                    Stepper("", value: Binding(
-                        get: { configManager.config.resolvedMonthlySalaryCycleStartDay },
-                        set: { newValue in
-                            setSalaryCycleStartDay(newValue)
-                        }
-                    ), in: 1...31)
-                    .labelsHidden()
-                    .frame(width: 44)
-
-                    Text("每月 \(configManager.config.resolvedMonthlySalaryCycleStartDay) 日")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
-                        .accessibilityHidden(true)
-                    Spacer()
-                }
-
-                let period = configManager.config.currentSalaryCyclePeriod
-                HStack(spacing: 8) {
-                    Image(systemName: "calendar.badge.clock")
-                        .foregroundColor(.secondary)
-                    Text("当前周期 \(formatSalaryCyclePeriod(period))，计薪 \(period.paidWorkdays) 天")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .monospacedDigit()
-                }
-
-                Text("计薪天数按“日历”里的计薪规则统计；当月没有对应日期时，按当月最后一天作为周期起点。")
+                Text("周期内工作天数会随自然月、固定周期、节假日和调休日变化。")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1262,6 +1602,11 @@ struct SettingsView: View {
                     ))
                     .disabled(!configManager.config.displaysEarningsInStatusBar)
 
+                    Toggle("显示摸鱼状态图标", isOn: Binding(
+                        get: { configManager.config.statusBarDisplaysOffTaskStatusIcon },
+                        set: { configManager.config.statusBarShowsOffTaskStatusIcon = $0 }
+                    ))
+
                     Toggle("显示 ¥ 符号", isOn: Binding(
                         get: { configManager.config.statusBarDisplaysCurrencySymbol },
                         set: { configManager.config.statusBarShowsCurrencySymbol = $0 }
@@ -1354,7 +1699,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 预览只模拟弹窗本体，不再额外画一条假的状态栏，减少认知干扰。
+    /// 右侧预览直接复用真实弹窗组件，避免设置页和实际弹窗出现两套展示逻辑。
     private var displayPreviewPanel: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 14) {
@@ -1369,7 +1714,9 @@ struct SettingsView: View {
 
     /// 弹窗内容开关逐项独立控制，避免“全部展示/全部隐藏”的粗粒度体验。
     private var popoverDisplaySection: some View {
-        GroupBox {
+        let settlementTitle = offTaskSettlementPeriodTitle(configManager.config)
+
+        return GroupBox {
             VStack(alignment: .leading, spacing: 12) {
                 Toggle("打开弹窗默认隐藏金额", isOn: Binding(
                     get: { configManager.config.opensPrivatePopoverFromStatusItemClick },
@@ -1383,74 +1730,146 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
 
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 10) {
-                        popoverContentToggle("当前收入", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysCurrentEarnings },
-                            set: { configManager.config.popoverShowsCurrentEarnings = $0 }
-                        ))
+                    popoverContentGroup("基础信息") {
+                        HStack(spacing: 10) {
+                            popoverContentToggle("当前收入", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysCurrentEarnings },
+                                set: { configManager.config.popoverShowsCurrentEarnings = $0 }
+                            ))
 
-                        popoverContentToggle("今日剩余", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysRemainingEarnings },
-                            set: { configManager.config.popoverShowsRemainingEarnings = $0 }
-                        ))
+                            popoverContentToggle("今日剩余", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysRemainingEarnings },
+                                set: { configManager.config.popoverShowsRemainingEarnings = $0 }
+                            ))
+                        }
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("工作状态", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysWorkStatus },
+                                set: { configManager.config.popoverShowsWorkStatus = $0 }
+                            ))
+
+                            popoverContentToggle("工作进度条", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysWorkProgress },
+                                set: { configManager.config.popoverShowsWorkProgress = $0 }
+                            ))
+                        }
                     }
 
-                    HStack(spacing: 10) {
-                        popoverContentToggle("工作状态", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysWorkStatus },
-                            set: { configManager.config.popoverShowsWorkStatus = $0 }
-                        ))
+                    popoverContentGroup("薪资指标") {
+                        HStack(spacing: 10) {
+                            popoverContentToggle("秒薪", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysSecondSalary },
+                                set: { configManager.config.popoverShowsSecondSalary = $0 }
+                            ))
 
-                        popoverContentToggle("工作进度条", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysWorkProgress },
-                            set: { configManager.config.popoverShowsWorkProgress = $0 }
-                        ))
+                            popoverContentToggle("分薪", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysMinuteSalary },
+                                set: { configManager.config.popoverShowsMinuteSalary = $0 }
+                            ))
+                        }
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("时薪", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysHourlySalary },
+                                set: { configManager.config.popoverShowsHourlySalary = $0 }
+                            ))
+
+                            popoverContentToggle("日薪", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysDailySalary },
+                                set: { configManager.config.popoverShowsDailySalary = $0 }
+                            ))
+                        }
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("月薪", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysMonthlySalary },
+                                set: { configManager.config.popoverShowsMonthlySalary = $0 }
+                            ))
+
+                            popoverContentToggle("年薪", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysYearlySalary },
+                                set: { configManager.config.popoverShowsYearlySalary = $0 }
+                            ))
+                        }
                     }
 
-                    HStack(spacing: 10) {
-                        popoverContentToggle("秒薪", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysSecondSalary },
-                            set: { configManager.config.popoverShowsSecondSalary = $0 }
-                        ))
+                    popoverContentGroup("摸鱼状态") {
+                        HStack(spacing: 10) {
+                            popoverContentToggle("状态入口", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysOffTaskStatus },
+                                set: { configManager.config.popoverShowsOffTaskStatus = $0 }
+                            ))
 
-                        popoverContentToggle("分薪", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysMinuteSalary },
-                            set: { configManager.config.popoverShowsMinuteSalary = $0 }
-                        ))
+                            Spacer(minLength: 0)
+                        }
+
+                        Text("摸鱼薪资")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("本日摸鱼薪资", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysTodayOffTaskSalary },
+                                set: { configManager.config.popoverShowsTodayOffTaskSalary = $0 }
+                            ))
+
+                            popoverContentToggle("本周摸鱼薪资", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysWeekOffTaskSalary },
+                                set: { configManager.config.popoverShowsWeekOffTaskSalary = $0 }
+                            ))
+                        }
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("\(settlementTitle)摸鱼薪资", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysSalaryCycleOffTaskSalary },
+                                set: { configManager.config.popoverShowsSalaryCycleOffTaskSalary = $0 }
+                            ))
+
+                            popoverContentToggle("历史摸鱼薪资", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysHistoricalOffTaskSalary },
+                                set: { configManager.config.popoverShowsHistoricalOffTaskSalary = $0 }
+                            ))
+                        }
+
+                        Text("摸鱼时长")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("本日摸鱼时长", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysTodayOffTaskDuration },
+                                set: { configManager.config.popoverShowsTodayOffTaskDuration = $0 }
+                            ))
+
+                            popoverContentToggle("本周摸鱼时长", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysWeekOffTaskDuration },
+                                set: { configManager.config.popoverShowsWeekOffTaskDuration = $0 }
+                            ))
+                        }
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("\(settlementTitle)摸鱼时长", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysSalaryCycleOffTaskDuration },
+                                set: { configManager.config.popoverShowsSalaryCycleOffTaskDuration = $0 }
+                            ))
+
+                            popoverContentToggle("历史摸鱼时长", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysHistoricalOffTaskDuration },
+                                set: { configManager.config.popoverShowsHistoricalOffTaskDuration = $0 }
+                            ))
+                        }
                     }
 
-                    HStack(spacing: 10) {
-                        popoverContentToggle("时薪", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysHourlySalary },
-                            set: { configManager.config.popoverShowsHourlySalary = $0 }
-                        ))
+                    popoverContentGroup("其他") {
+                        HStack(spacing: 10) {
+                            popoverContentToggle("打工语录", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysQuote },
+                                set: { configManager.config.popoverShowsQuote = $0 }
+                            ))
 
-                        popoverContentToggle("日薪", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysDailySalary },
-                            set: { configManager.config.popoverShowsDailySalary = $0 }
-                        ))
-                    }
-
-                    HStack(spacing: 10) {
-                        popoverContentToggle("月薪", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysMonthlySalary },
-                            set: { configManager.config.popoverShowsMonthlySalary = $0 }
-                        ))
-
-                        popoverContentToggle("年薪", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysYearlySalary },
-                            set: { configManager.config.popoverShowsYearlySalary = $0 }
-                        ))
-                    }
-
-                    HStack(spacing: 10) {
-                        popoverContentToggle("打工语录", isOn: Binding(
-                            get: { configManager.config.popoverDisplaysQuote },
-                            set: { configManager.config.popoverShowsQuote = $0 }
-                        ))
-
-                        Color.clear
-                            .frame(maxWidth: .infinity)
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
 
@@ -1580,10 +1999,500 @@ struct SettingsView: View {
         }
     }
 
+    /// 摸鱼统计直接按已记录区间和当前薪资规则实时汇总，便于对照当日、周期和长期数据。
+    private var offTaskStatsSection: some View {
+        let config = configManager.config
+        let today = offTaskTracker.currentSummary(config: config)
+        let total = offTaskTracker.totalSummary(config: config)
+        let displayPeriods = offTaskDisplayPeriods(config: config, today: today)
+        let historyYears = offTaskHistoryYears(config: config)
+        let startAvailability = offTaskTracker.startAvailability(config: config)
+
+        return VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(offTaskStatusText(today))
+                                .font(.callout.weight(.semibold))
+                            Text(offTaskStatusDetail(today))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Spacer()
+
+                        Button {
+                            offTaskTracker.toggle(config: config)
+                        } label: {
+                            Label(offTaskTracker.isActive ? "结束摸鱼" : "开启摸鱼", systemImage: offTaskTracker.isActive ? "stop.fill" : "play.fill")
+                        }
+                        .disabled(!offTaskTracker.isActive && !startAvailability.canStart)
+                        .help(offTaskToggleHelp(isActive: offTaskTracker.isActive, availability: startAvailability))
+                        .controlSize(.small)
+                    }
+
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                        offTaskStatCard(title: "摸鱼薪资", value: formatMoney(today.amount))
+                        offTaskStatCard(title: "计薪时长", value: formatOffTaskDuration(today.paidSeconds))
+                        offTaskStatCard(title: "摸鱼次数", value: "\(today.sessionCount)")
+                        offTaskStatCard(title: "今日占比", value: formatOffTaskPercent(today))
+                    }
+                }
+                .padding(12)
+            } label: {
+                Label("当前状态", systemImage: "fish")
+                    .font(.headline)
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), alignment: .leading, spacing: 10) {
+                        ForEach(displayPeriods) { period in
+                            offTaskPeriodCard(period)
+                        }
+                    }
+                }
+                .padding(12)
+            } label: {
+                Label("数据概览", systemImage: "chart.bar.xaxis")
+                    .font(.headline)
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                        offTaskStatCard(title: "历史摸鱼薪资", value: formatMoney(total.amount))
+                        offTaskStatCard(title: "历史摸鱼时长", value: formatOffTaskDuration(total.paidSeconds))
+                        offTaskStatCard(title: "历史摸鱼次数", value: "\(total.sessionCount)")
+                        offTaskStatCard(title: "历史摸鱼天数", value: "\(total.dayCount)")
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 8) {
+                        Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        offTaskHistoryPill("\(total.sessionCount)次")
+                        offTaskHistoryPill("\(total.dayCount)天")
+                    }
+
+                    if historyYears.isEmpty {
+                        Text("暂无摸鱼记录")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(historyYears) { year in
+                                offTaskHistoryYearDisclosure(year, config: config)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            } label: {
+                Label("历史记录", systemImage: "tray.full")
+                    .font(.headline)
+            }
+        }
+    }
+
+    private func offTaskDisplayPeriods(config: SalaryConfig, today: OffTaskDailySummary) -> [OffTaskDisplayPeriod] {
+        let now = Date()
+        let todayAggregate = OffTaskAggregateSummary(
+            paidSeconds: today.paidSeconds,
+            amount: today.amount,
+            sessionCount: today.sessionCount,
+            dayCount: today.hasRecords ? 1 : 0
+        )
+        let week = offTaskWeekPeriod(containing: now)
+        let settlement = config.salaryCyclePeriod(containing: now)
+        let weekSummary = offTaskTracker.summary(from: week.start, toExclusive: week.endExclusive, config: config, now: now)
+        let settlementSummary = offTaskTracker.summary(from: settlement.start, toExclusive: settlement.endExclusive, config: config, now: now)
+
+        return [
+            OffTaskDisplayPeriod(
+                id: "today",
+                title: "本日",
+                rangeText: formatOffTaskDateRange(start: today.workday, endExclusive: Calendar.current.date(byAdding: .day, value: 1, to: today.workday) ?? today.workday),
+                summary: todayAggregate
+            ),
+            OffTaskDisplayPeriod(
+                id: "week",
+                title: "本周",
+                rangeText: formatOffTaskDateRange(start: week.start, endExclusive: week.endExclusive),
+                summary: weekSummary
+            ),
+            OffTaskDisplayPeriod(
+                id: "settlement",
+                title: offTaskSettlementPeriodTitle(config),
+                rangeText: formatOffTaskDateRange(start: settlement.start, endExclusive: settlement.endExclusive),
+                summary: settlementSummary
+            )
+        ]
+    }
+
+    private func offTaskPeriodCard(_ period: OffTaskDisplayPeriod) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(period.title)
+                    .font(.callout.weight(.semibold))
+                Text(period.rangeText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 7) {
+                offTaskPeriodMetric(title: "摸鱼薪资", value: formatMoney(period.summary.amount))
+                offTaskPeriodMetric(title: "计薪时长", value: formatOffTaskDuration(period.summary.paidSeconds))
+
+                HStack(spacing: 8) {
+                    offTaskHistoryPill("\(period.summary.sessionCount)次")
+                    offTaskHistoryPill("\(period.summary.dayCount)天")
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func offTaskPeriodMetric(title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(width: 52, alignment: .leading)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+    }
+
+    /// 历史记录按年、月、日逐级折叠，避免记录增多后单层列表过长。
+    private func offTaskHistoryYears(config: SalaryConfig) -> [OffTaskHistoryYear] {
+        let summaries = offTaskTracker.sessionSummaries(config: config)
+        let grouped = Dictionary(grouping: summaries) { summary in
+            offTaskYearKey(summary.workday)
+        }
+
+        return grouped.keys.sorted(by: >).compactMap { key in
+            guard let records = grouped[key] else {
+                return nil
+            }
+            let months = offTaskHistoryMonths(from: records)
+
+            return OffTaskHistoryYear(
+                id: key,
+                title: formatOffTaskYear(records.first?.workday ?? Date()),
+                months: months,
+                paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
+                amount: records.reduce(0) { $0 + $1.amount },
+                recordCount: records.count,
+                dayCount: months.reduce(0) { $0 + $1.days.count }
+            )
+        }
+    }
+
+    private func offTaskHistoryMonths(from summaries: [OffTaskSessionSummary]) -> [OffTaskHistoryMonth] {
+        let grouped = Dictionary(grouping: summaries) { summary in
+            offTaskMonthKey(summary.workday)
+        }
+
+        return grouped.keys.sorted(by: >).compactMap { key in
+            guard let records = grouped[key] else {
+                return nil
+            }
+            let days = offTaskHistoryDays(from: records)
+
+            return OffTaskHistoryMonth(
+                id: key,
+                title: formatOffTaskMonth(records.first?.workday ?? Date()),
+                days: days,
+                paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
+                amount: records.reduce(0) { $0 + $1.amount },
+                recordCount: records.count
+            )
+        }
+    }
+
+    private func offTaskHistoryDays(from summaries: [OffTaskSessionSummary]) -> [OffTaskHistoryDay] {
+        let grouped = Dictionary(grouping: summaries) { summary in
+            offTaskDayKey(summary.workday)
+        }
+
+        return grouped.keys.sorted(by: >).compactMap { key in
+            guard let records = grouped[key]?.sorted(by: { lhs, rhs in
+                (lhs.session.end ?? lhs.session.start) > (rhs.session.end ?? rhs.session.start)
+            }) else {
+                return nil
+            }
+
+            return OffTaskHistoryDay(
+                id: key,
+                title: formatOffTaskDay(records.first?.workday ?? Date()),
+                summaries: records,
+                paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
+                amount: records.reduce(0) { $0 + $1.amount }
+            )
+        }
+    }
+
+    private func offTaskHistoryYearDisclosure(_ year: OffTaskHistoryYear, config: SalaryConfig) -> some View {
+        let isExpanded = expandedOffTaskHistoryYears.contains(year.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
+                toggleOffTaskHistoryExpansion(year.id, in: &expandedOffTaskHistoryYears)
+            } label: {
+                offTaskHistoryGroupLabel(
+                    icon: "calendar",
+                    title: year.title,
+                    detail: "共计摸鱼\(year.months.count)月 | \(year.dayCount)天",
+                    recordCount: year.recordCount,
+                    paidSeconds: year.paidSeconds,
+                    amount: year.amount
+                )
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(year.months) { month in
+                        offTaskHistoryMonthDisclosure(month, config: config)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.52))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.38), lineWidth: 1)
+        )
+    }
+
+    private func offTaskHistoryMonthDisclosure(_ month: OffTaskHistoryMonth, config: SalaryConfig) -> some View {
+        let isExpanded = expandedOffTaskHistoryMonths.contains(month.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
+                toggleOffTaskHistoryExpansion(month.id, in: &expandedOffTaskHistoryMonths)
+            } label: {
+                offTaskHistoryGroupLabel(
+                    icon: "calendar.circle",
+                    title: month.title,
+                    detail: "共计摸鱼\(month.days.count)天",
+                    recordCount: month.recordCount,
+                    paidSeconds: month.paidSeconds,
+                    amount: month.amount
+                )
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(month.days) { day in
+                        offTaskHistoryDayDisclosure(day, config: config)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.46))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.30), lineWidth: 1)
+        )
+    }
+
+    private func offTaskHistoryDayDisclosure(_ day: OffTaskHistoryDay, config: SalaryConfig) -> some View {
+        let isExpanded = expandedOffTaskHistoryDays.contains(day.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
+                toggleOffTaskHistoryExpansion(day.id, in: &expandedOffTaskHistoryDays)
+            } label: {
+                offTaskHistoryGroupLabel(
+                    icon: "calendar.day.timeline.left",
+                    title: day.title,
+                    detail: nil,
+                    recordCount: day.summaries.count,
+                    paidSeconds: day.paidSeconds,
+                    amount: day.amount
+                )
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("起止时间")
+                            .frame(width: 132, alignment: .leading)
+                        Text("计薪时长")
+                            .frame(width: 76, alignment: .leading)
+                        Text("摸鱼薪资")
+                            .frame(width: 86, alignment: .leading)
+                        Text("状态")
+                            .frame(width: 64, alignment: .leading)
+                        Spacer()
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+
+                    ForEach(day.summaries) { summary in
+                        OffTaskSessionRowView(summary: summary, config: config)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.36))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.24), lineWidth: 1)
+        )
+    }
+
+    private func offTaskHistoryDisclosureButton<Label: View>(
+        isExpanded: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.82))
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.orange)
+                }
+                .frame(width: 28, height: 28)
+
+                label()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(isExpanded ? "收起记录" : "展开记录")
+    }
+
+    private func toggleOffTaskHistoryExpansion(_ id: String, in expandedIDs: inout Set<String>) {
+        if expandedIDs.contains(id) {
+            expandedIDs.remove(id)
+        } else {
+            expandedIDs.insert(id)
+        }
+    }
+
+    private func offTaskHistoryGroupLabel(
+        icon: String,
+        title: String,
+        detail: String?,
+        recordCount: Int,
+        paidSeconds: TimeInterval,
+        amount: Double
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.orange)
+                .frame(width: 16)
+
+            Text(title)
+                .font(.callout.weight(.semibold))
+
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer(minLength: 10)
+
+            offTaskHistoryPill("\(recordCount)次")
+            offTaskHistoryPill(formatOffTaskDuration(paidSeconds))
+            Text(formatMoney(amount))
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+        }
+        .foregroundColor(.primary)
+    }
+
+    private func offTaskHistoryPill(_ text: String) -> some View {
+        Text(text)
+            .font(.caption.monospacedDigit())
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .padding(.vertical, 2)
+            .padding(.horizontal, 6)
+            .background(
+                Capsule()
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+            )
+    }
+
     /// 弹窗内容开关使用统一宽度，保证两列排列时不会因为文字长短错位。
     private func popoverContentToggle(_ title: String, isOn: Binding<Bool>) -> some View {
         Toggle(title, isOn: isOn)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func popoverContentGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundColor(.secondary)
+
+            content()
+        }
+        .padding(8)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.42))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.24), lineWidth: 1)
+        )
     }
 
     /// 快捷键设置包含录制、启停、动作排序和注册错误提示。
@@ -1613,18 +2522,53 @@ struct SettingsView: View {
                         .foregroundColor(.secondary)
 
                     shortcutActionSection
+                }
 
-                    if let registrationError = shortcutMonitor.registrationError {
-                        Label(registrationError, systemImage: "exclamationmark.triangle")
-                            .font(.caption)
-                            .foregroundColor(.orange)
-                    }
+                Divider()
+
+                offTaskShortcutSection
+
+                if let registrationError = shortcutMonitor.registrationError {
+                    Label(registrationError, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundColor(.orange)
                 }
             }
             .padding(12)
         } label: {
             Label("快捷键", systemImage: "keyboard")
                 .font(.headline)
+        }
+    }
+
+    private var offTaskShortcutSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("启用摸鱼切换快捷键", isOn: Binding(
+                get: { configManager.config.offTaskShortcutEnabled },
+                set: { newValue in
+                    configManager.config.offTaskShortcutEnabled = newValue
+                    GlobalShortcutMonitor.shared.restart()
+                }
+            ))
+
+            if configManager.config.offTaskShortcutEnabled {
+                HStack {
+                    Text("摸鱼切换")
+                        .frame(width: 80, alignment: .leading)
+                    ShortcutRecorderView(config: configManager.config, target: .offTaskToggle)
+                    Button("重置") {
+                        configManager.config.offTaskShortcutModifiers = SalaryConfig.defaultShortcutModifiers
+                        configManager.config.offTaskShortcutKeyCode = SalaryConfig.defaultOffTaskShortcutKeyCode
+                        GlobalShortcutMonitor.shared.restart()
+                    }
+                    .controlSize(.small)
+                    Spacer()
+                }
+
+                Text("触发后会在当前工作窗口内开启摸鱼；已开启时触发会结束本次记录。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
         }
     }
 
@@ -2281,6 +3225,158 @@ struct SettingsView: View {
         )
     }
 
+    private func offTaskStatCard(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func offTaskStatusText(_ summary: OffTaskDailySummary) -> String {
+        if offTaskTracker.isActive {
+            return "摸鱼中"
+        }
+        if summary.isWorkFinished {
+            return "今日已结算"
+        }
+        return "当前未开启"
+    }
+
+    private func offTaskStatusDetail(_ summary: OffTaskDailySummary) -> String {
+        if offTaskTracker.isActive, let start = offTaskTracker.activeSessionStart {
+            return "从 \(formatOffTaskClock(start)) 开始，今日已累计 \(formatOffTaskDuration(summary.paidSeconds))"
+        }
+        if summary.isWorkFinished {
+            return summary.hasRecords
+                ? "下班总结：\(formatOffTaskDuration(summary.paidSeconds))，\(formatMoney(summary.amount))"
+                : "下班总结：今天没有摸鱼记录"
+        }
+        let availability = offTaskTracker.startAvailability(config: configManager.config)
+        return availability.canStart ? "今日已累计 \(formatOffTaskDuration(summary.paidSeconds))" : availability.shortMessage
+    }
+
+    private func offTaskToggleHelp(isActive: Bool, availability: OffTaskStartAvailability) -> String {
+        isActive ? "结束当前摸鱼记录" : availability.helpMessage
+    }
+
+    private func formatOffTaskPercent(_ summary: OffTaskDailySummary) -> String {
+        let dailySalary = configManager.config.effectiveDailySalary(on: summary.workday)
+        guard dailySalary > 0 else { return "0.0%" }
+        return String(format: "%.1f%%", summary.amount / dailySalary * 100)
+    }
+
+    private func formatOffTaskDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return "\(hours)时\(minutes)分\(seconds)秒"
+        }
+        if minutes > 0 {
+            return "\(minutes)分\(seconds)秒"
+        }
+        return "\(seconds)秒"
+    }
+
+    private func formatOffTaskClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func formatOffTaskDay(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "MM月dd日 E"
+        return formatter.string(from: date)
+    }
+
+    private func formatOffTaskYear(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年"
+        return formatter.string(from: date)
+    }
+
+    private func formatOffTaskMonth(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年MM月"
+        return formatter.string(from: date)
+    }
+
+    private func formatOffTaskDateRange(start: Date, endExclusive: Date) -> String {
+        let calendar = Calendar.current
+        let normalizedStart = calendar.startOfDay(for: start)
+        let normalizedEnd = calendar.startOfDay(for: endExclusive)
+        let endInclusive = calendar.date(byAdding: .day, value: -1, to: normalizedEnd) ?? normalizedStart
+
+        if calendar.isDate(normalizedStart, inSameDayAs: endInclusive) {
+            return formatOffTaskRangeDate(normalizedStart)
+        }
+        return "\(formatOffTaskRangeDate(normalizedStart)) - \(formatOffTaskRangeDate(endInclusive))"
+    }
+
+    private func formatOffTaskRangeDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy.MM.dd"
+        return formatter.string(from: date)
+    }
+
+    private func offTaskWeekPeriod(containing date: Date, calendar: Calendar = .current) -> (start: Date, endExclusive: Date) {
+        let day = calendar.startOfDay(for: date)
+        let weekday = calendar.component(.weekday, from: day)
+        let mappedWeekday = weekday == 1 ? 7 : weekday - 1
+        let start = calendar.date(byAdding: .day, value: 1 - mappedWeekday, to: day) ?? day
+        let endExclusive = calendar.date(byAdding: .day, value: 7, to: start) ?? start
+        return (start, endExclusive)
+    }
+
+    private func offTaskSettlementPeriodTitle(_ config: SalaryConfig) -> String {
+        config.resolvedSalaryCycleMode == .naturalMonth ? "本月" : "本周期"
+    }
+
+    private func offTaskYearKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy"
+        return formatter.string(from: date)
+    }
+
+    private func offTaskMonthKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM"
+        return formatter.string(from: date)
+    }
+
+    private func offTaskDayKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
     /// 设置页金额格式和弹窗共用小数位配置，但可按场景决定是否显示 ¥。
     private func formatMoney(_ value: Double, showCurrencySymbol: Bool = true) -> String {
         let amount = String(format: "%.\(configManager.config.displayDecimalPlaces)f", value)
@@ -2290,17 +3386,19 @@ struct SettingsView: View {
     /// 薪资换算说明必须随月薪折算和补贴规则变化，避免用户误以为所有金额都只按日薪反推。
     private var salaryConversionDescription: String {
         let config = configManager.config
+        let period = config.currentSalaryCyclePeriod
+        let periodDescription = "\(config.resolvedSalaryCycleMode.title)：\(formatSalaryCyclePeriod(period))"
         let monthlyDescription: String
         switch config.resolvedMonthlySalaryCalculationMode {
         case .fixedAverage:
             monthlyDescription = "基础月薪 = 基础日薪 × 固定 \(formatWorkdayCount(config.resolvedFixedMonthlyWorkdays)) 天"
         case .salaryCycleWorkdays:
-            let period = config.currentSalaryCyclePeriod
-            monthlyDescription = "基础月薪 = 基础日薪 × 当前薪资周期计薪 \(period.paidWorkdays) 天（\(formatSalaryCyclePeriod(period))）"
+            monthlyDescription = "基础月薪 = 基础日薪 × 当前计薪周期计薪 \(period.paidWorkdays) 天（\(formatSalaryCyclePeriod(period))）"
         }
 
         return """
         换算说明：
+        当前计薪周期 = \(periodDescription)。
         基础薪资先统一折算为基础日薪。
         展示日薪 = 基础日薪 + 按日补贴 + 已平摊到每天的按月补贴。
         \(monthlyDescription)；展示月薪 = 基础月薪 + 按日补贴 × 月薪折算天数 + 按月补贴原值。
@@ -2362,7 +3460,7 @@ struct SettingsView: View {
         return "\(start)-\(end)"
     }
 
-    /// 动态薪资周期依赖节假日和调休日，切到该模式时主动加载涉及年份。
+    /// 周期内工作天数依赖节假日和调休日，切到该模式时主动加载涉及年份。
     private func ensureSalaryCycleHolidayData() {
         let config = configManager.config
         let subsidyUsesCycleWorkdays = config.subsidies.contains { subsidy in
@@ -2412,7 +3510,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 薪资周期起始日只允许 1...31；2 月缺失日期由计算层折到当月最后一天。
+    /// 计薪周期起始日只允许 1...31；2 月缺失日期由计算层折到当月最后一天。
     private func sanitizeSalaryCycleStartDayText(_ newValue: String) {
         let sanitized = InputValidation.integerText(newValue, maxDigits: 2)
         if sanitized != newValue {

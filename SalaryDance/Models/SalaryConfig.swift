@@ -95,7 +95,34 @@ enum SpecialWorkdayRuleKind: String, Codable, CaseIterable, Identifiable {
     }
 }
 
-/// 月薪和日薪互相折算时使用的计薪日来源。
+/// 月薪结算覆盖的日期范围；这个周期只决定归属范围，不直接决定日薪折算分母。
+enum SalaryCycleMode: String, Codable, CaseIterable, Identifiable {
+    case naturalMonth
+    case fixedMonthlyCycle
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .naturalMonth: return "自然月"
+        case .fixedMonthlyCycle: return "固定周期"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.naturalMonth.rawValue, "自然月", "按自然月":
+            self = .naturalMonth
+        case Self.fixedMonthlyCycle.rawValue, "固定周期", "自定义周期", "按薪资周期":
+            self = .fixedMonthlyCycle
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown SalaryCycleMode: \(value)"))
+        }
+    }
+}
+
+/// 月薪和日薪互相折算时使用的计薪日来源；周期范围由 SalaryCycleMode 独立决定。
 enum MonthlySalaryCalculationMode: String, Codable, CaseIterable, Identifiable {
     case fixedAverage
     case salaryCycleWorkdays
@@ -104,17 +131,17 @@ enum MonthlySalaryCalculationMode: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .fixedAverage: return "固定指定天数"
-        case .salaryCycleWorkdays: return "按薪资周期计薪日"
+        case .fixedAverage: return "固定天数"
+        case .salaryCycleWorkdays: return "周期内工作天数"
         }
     }
 
     init(from decoder: Decoder) throws {
         let value = try decoder.singleValueContainer().decode(String.self)
         switch value {
-        case Self.fixedAverage.rawValue, "固定指定天数":
+        case Self.fixedAverage.rawValue, "固定指定天数", "固定天数":
             self = .fixedAverage
-        case Self.salaryCycleWorkdays.rawValue, "按薪资周期计薪日":
+        case Self.salaryCycleWorkdays.rawValue, "按薪资周期计薪日", "周期内工作天数":
             self = .salaryCycleWorkdays
         default:
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown MonthlySalaryCalculationMode: \(value)"))
@@ -443,7 +470,7 @@ struct SpecialWorkdayRule: Codable, Equatable, Identifiable {
     }
 }
 
-/// 当前薪资周期范围，以及该周期内按规则统计出的计薪日数量。
+/// 当前计薪周期范围，以及该周期内按规则统计出的计薪日数量。
 struct SalaryCyclePeriod: Equatable {
     let start: Date
     let endExclusive: Date
@@ -545,9 +572,11 @@ struct SalaryConfig: Codable, Equatable {
     static let monthlyWorkdaysRange: ClosedRange<Double> = 1...31
     static let yearlyWorkDays = 250.0
     static let defaultShortcutModifiers = Int(NSEvent.ModifierFlags([.option, .command]).rawValue)
+    static let defaultOffTaskShortcutKeyCode: UInt16 = 7
 
     var salaryType: SalaryType = .monthly
     var salaryAmount: Double = 0
+    var salaryCycleMode: SalaryCycleMode = .naturalMonth
     var monthlySalaryCalculationMode: MonthlySalaryCalculationMode = .fixedAverage
     var fixedMonthlyWorkdays: Double = Self.averageMonthlyWorkDays
     var monthlySalaryCycleStartDay: Int = 1
@@ -576,12 +605,25 @@ struct SalaryConfig: Codable, Equatable {
     var popoverShowsYearlySalary: Bool = false
     var popoverShowsWorkProgress: Bool = true
     var popoverShowsQuote: Bool = true
+    var popoverShowsOffTaskStatus: Bool = true
+    var popoverShowsTodayOffTaskSalary: Bool = false
+    var popoverShowsWeekOffTaskSalary: Bool = false
+    var popoverShowsSalaryCycleOffTaskSalary: Bool = false
+    var popoverShowsHistoricalOffTaskSalary: Bool = false
+    var popoverShowsTodayOffTaskDuration: Bool = false
+    var popoverShowsWeekOffTaskDuration: Bool = false
+    var popoverShowsSalaryCycleOffTaskDuration: Bool = false
+    var popoverShowsHistoricalOffTaskDuration: Bool = false
     var statusItemClickShowsPrivatePopover: Bool = true
     var statusBarShowsAppIcon: Bool = false
     var statusBarShowsCurrencySymbol: Bool = true
+    var statusBarShowsOffTaskStatusIcon: Bool = true
     var statusBarSalaryAnimationStyle: StatusBarSalaryAnimationStyle = .rolling
     var moneyDecimalPlaces: Int = 2
     var shortcutActionSequence: [ShortcutAction] = ShortcutAction.defaultSequence
+    var offTaskShortcutEnabled: Bool = true
+    var offTaskShortcutModifiers: Int = Self.defaultShortcutModifiers
+    var offTaskShortcutKeyCode: UInt16 = Self.defaultOffTaskShortcutKeyCode
     var idleUsesLowFrequencyUpdates: Bool = true
     var refreshIntervalSeconds: Double = 1
     var lunchBreakShowsColor: Bool = false
@@ -603,6 +645,7 @@ struct SalaryConfig: Codable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case salaryType
         case salaryAmount
+        case salaryCycleMode
         case monthlySalaryCalculationMode
         case fixedMonthlyWorkdays
         case monthlySalaryCycleStartDay
@@ -631,12 +674,25 @@ struct SalaryConfig: Codable, Equatable {
         case popoverShowsYearlySalary
         case popoverShowsWorkProgress
         case popoverShowsQuote
+        case popoverShowsOffTaskStatus
+        case popoverShowsTodayOffTaskSalary
+        case popoverShowsWeekOffTaskSalary
+        case popoverShowsSalaryCycleOffTaskSalary
+        case popoverShowsHistoricalOffTaskSalary
+        case popoverShowsTodayOffTaskDuration
+        case popoverShowsWeekOffTaskDuration
+        case popoverShowsSalaryCycleOffTaskDuration
+        case popoverShowsHistoricalOffTaskDuration
         case statusItemClickShowsPrivatePopover
         case statusBarShowsAppIcon
         case statusBarShowsCurrencySymbol
+        case statusBarShowsOffTaskStatusIcon
         case statusBarSalaryAnimationStyle
         case moneyDecimalPlaces
         case shortcutActionSequence
+        case offTaskShortcutEnabled
+        case offTaskShortcutModifiers
+        case offTaskShortcutKeyCode
         case idleUsesLowFrequencyUpdates
         case refreshIntervalSeconds
         case lunchBreakShowsColor
@@ -666,6 +722,8 @@ struct SalaryConfig: Codable, Equatable {
         monthlySalaryCalculationMode = container.decodeLossy(MonthlySalaryCalculationMode.self, forKey: .monthlySalaryCalculationMode, default: defaults.monthlySalaryCalculationMode)
         fixedMonthlyWorkdays = container.decodeLossy(Double.self, forKey: .fixedMonthlyWorkdays, default: defaults.fixedMonthlyWorkdays)
         monthlySalaryCycleStartDay = container.decodeLossy(Int.self, forKey: .monthlySalaryCycleStartDay, default: defaults.monthlySalaryCycleStartDay)
+        salaryCycleMode = container.decodeLossyOptional(SalaryCycleMode.self, forKey: .salaryCycleMode)
+            ?? (monthlySalaryCycleStartDay == defaults.monthlySalaryCycleStartDay ? .naturalMonth : .fixedMonthlyCycle)
         subsidies = container.decodeLossy([SalarySubsidy].self, forKey: .subsidies, default: defaults.subsidies)
         workTime = container.decodeLossy(TimeRange.self, forKey: .workTime, default: defaults.workTime)
         lunchBreakEnabled = container.decodeLossy(Bool.self, forKey: .lunchBreakEnabled, default: defaults.lunchBreakEnabled)
@@ -691,12 +749,25 @@ struct SalaryConfig: Codable, Equatable {
         popoverShowsYearlySalary = container.decodeLossy(Bool.self, forKey: .popoverShowsYearlySalary, default: defaults.popoverShowsYearlySalary)
         popoverShowsWorkProgress = container.decodeLossy(Bool.self, forKey: .popoverShowsWorkProgress, default: defaults.popoverShowsWorkProgress)
         popoverShowsQuote = container.decodeLossy(Bool.self, forKey: .popoverShowsQuote, default: defaults.popoverShowsQuote)
+        popoverShowsOffTaskStatus = container.decodeLossy(Bool.self, forKey: .popoverShowsOffTaskStatus, default: defaults.popoverShowsOffTaskStatus)
+        popoverShowsTodayOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsTodayOffTaskSalary, default: defaults.popoverShowsTodayOffTaskSalary)
+        popoverShowsWeekOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsWeekOffTaskSalary, default: defaults.popoverShowsWeekOffTaskSalary)
+        popoverShowsSalaryCycleOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsSalaryCycleOffTaskSalary, default: defaults.popoverShowsSalaryCycleOffTaskSalary)
+        popoverShowsHistoricalOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsHistoricalOffTaskSalary, default: defaults.popoverShowsHistoricalOffTaskSalary)
+        popoverShowsTodayOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsTodayOffTaskDuration, default: defaults.popoverShowsTodayOffTaskDuration)
+        popoverShowsWeekOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsWeekOffTaskDuration, default: defaults.popoverShowsWeekOffTaskDuration)
+        popoverShowsSalaryCycleOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsSalaryCycleOffTaskDuration, default: defaults.popoverShowsSalaryCycleOffTaskDuration)
+        popoverShowsHistoricalOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsHistoricalOffTaskDuration, default: defaults.popoverShowsHistoricalOffTaskDuration)
         statusItemClickShowsPrivatePopover = container.decodeLossy(Bool.self, forKey: .statusItemClickShowsPrivatePopover, default: defaults.statusItemClickShowsPrivatePopover)
         statusBarShowsAppIcon = container.decodeLossy(Bool.self, forKey: .statusBarShowsAppIcon, default: defaults.statusBarShowsAppIcon)
         statusBarShowsCurrencySymbol = container.decodeLossy(Bool.self, forKey: .statusBarShowsCurrencySymbol, default: defaults.statusBarShowsCurrencySymbol)
+        statusBarShowsOffTaskStatusIcon = container.decodeLossy(Bool.self, forKey: .statusBarShowsOffTaskStatusIcon, default: defaults.statusBarShowsOffTaskStatusIcon)
         statusBarSalaryAnimationStyle = container.decodeLossy(StatusBarSalaryAnimationStyle.self, forKey: .statusBarSalaryAnimationStyle, default: defaults.statusBarSalaryAnimationStyle)
         moneyDecimalPlaces = container.decodeLossy(Int.self, forKey: .moneyDecimalPlaces, default: defaults.moneyDecimalPlaces)
         shortcutActionSequence = container.decodeLossy([ShortcutAction].self, forKey: .shortcutActionSequence, default: defaults.shortcutActionSequence)
+        offTaskShortcutEnabled = container.decodeLossy(Bool.self, forKey: .offTaskShortcutEnabled, default: defaults.offTaskShortcutEnabled)
+        offTaskShortcutModifiers = container.decodeLossy(Int.self, forKey: .offTaskShortcutModifiers, default: defaults.offTaskShortcutModifiers)
+        offTaskShortcutKeyCode = container.decodeLossy(UInt16.self, forKey: .offTaskShortcutKeyCode, default: defaults.offTaskShortcutKeyCode)
         idleUsesLowFrequencyUpdates = container.decodeLossy(Bool.self, forKey: .idleUsesLowFrequencyUpdates, default: defaults.idleUsesLowFrequencyUpdates)
         refreshIntervalSeconds = container.decodeLossy(Double.self, forKey: .refreshIntervalSeconds, default: defaults.refreshIntervalSeconds)
         lunchBreakShowsColor = container.decodeLossy(Bool.self, forKey: .lunchBreakShowsColor, default: defaults.lunchBreakShowsColor)
@@ -716,13 +787,20 @@ struct SalaryConfig: Codable, Equatable {
     }
 
     var shortcutDisplayString: String {
-        let flags = shortcutModifierFlags
+        shortcutDisplayString(modifiers: shortcutModifierFlags, keyCode: resolvedShortcutKeyCode)
+    }
+
+    var offTaskShortcutDisplayString: String {
+        shortcutDisplayString(modifiers: offTaskShortcutModifierFlags, keyCode: resolvedOffTaskShortcutKeyCode)
+    }
+
+    private func shortcutDisplayString(modifiers flags: NSEvent.ModifierFlags, keyCode: UInt16) -> String {
         var parts: [String] = []
         if flags.contains(.control) { parts.append("⌃") }
         if flags.contains(.option) { parts.append("⌥") }
         if flags.contains(.shift) { parts.append("⇧") }
         if flags.contains(.command) { parts.append("⌘") }
-        let keyDisplay = ShortcutKey.displayName(for: resolvedShortcutKeyCode)
+        let keyDisplay = ShortcutKey.displayName(for: keyCode)
         return parts.joined() + keyDisplay
     }
 
@@ -735,8 +813,21 @@ struct SalaryConfig: Codable, Equatable {
         shortcutKeyCode
     }
 
+    var offTaskShortcutModifierFlags: NSEvent.ModifierFlags {
+        NSEvent.ModifierFlags(rawValue: UInt(offTaskShortcutModifiers))
+            .intersection(.shortcutModifierMask)
+    }
+
+    var resolvedOffTaskShortcutKeyCode: UInt16 {
+        offTaskShortcutKeyCode
+    }
+
     var displaysEarningsInStatusBar: Bool {
         statusBarShowsEarnings
+    }
+
+    var statusBarDisplaysOffTaskStatusIcon: Bool {
+        statusBarShowsOffTaskStatusIcon
     }
 
     var usesLowFrequencyUpdatesWhenIdle: Bool {
@@ -798,6 +889,65 @@ struct SalaryConfig: Codable, Equatable {
 
     var popoverDisplaysQuote: Bool {
         popoverShowsQuote
+    }
+
+    var popoverDisplaysOffTaskStatus: Bool {
+        popoverShowsOffTaskStatus
+    }
+
+    var popoverDisplaysTodayOffTaskSalary: Bool {
+        popoverShowsTodayOffTaskSalary
+    }
+
+    var popoverDisplaysWeekOffTaskSalary: Bool {
+        popoverShowsWeekOffTaskSalary
+    }
+
+    var popoverDisplaysSalaryCycleOffTaskSalary: Bool {
+        popoverShowsSalaryCycleOffTaskSalary
+    }
+
+    var popoverDisplaysHistoricalOffTaskSalary: Bool {
+        popoverShowsHistoricalOffTaskSalary
+    }
+
+    var popoverDisplaysTodayOffTaskDuration: Bool {
+        popoverShowsTodayOffTaskDuration
+    }
+
+    var popoverDisplaysWeekOffTaskDuration: Bool {
+        popoverShowsWeekOffTaskDuration
+    }
+
+    var popoverDisplaysSalaryCycleOffTaskDuration: Bool {
+        popoverShowsSalaryCycleOffTaskDuration
+    }
+
+    var popoverDisplaysHistoricalOffTaskDuration: Bool {
+        popoverShowsHistoricalOffTaskDuration
+    }
+
+    var popoverDisplaysAnyOffTaskSalaryMetric: Bool {
+        popoverDisplaysTodayOffTaskSalary
+            || popoverDisplaysWeekOffTaskSalary
+            || popoverDisplaysSalaryCycleOffTaskSalary
+            || popoverDisplaysHistoricalOffTaskSalary
+    }
+
+    var popoverDisplaysAnyOffTaskDurationMetric: Bool {
+        popoverDisplaysTodayOffTaskDuration
+            || popoverDisplaysWeekOffTaskDuration
+            || popoverDisplaysSalaryCycleOffTaskDuration
+            || popoverDisplaysHistoricalOffTaskDuration
+    }
+
+    var popoverDisplaysAnyOffTaskMetric: Bool {
+        popoverDisplaysAnyOffTaskSalaryMetric
+            || popoverDisplaysAnyOffTaskDurationMetric
+    }
+
+    var popoverDisplaysAnyOffTaskInformation: Bool {
+        popoverDisplaysOffTaskStatus || popoverDisplaysAnyOffTaskMetric
     }
 
     var usesLunchBreak: Bool {
@@ -918,11 +1068,16 @@ struct SalaryConfig: Codable, Equatable {
             || popoverDisplaysWorkStatus
             || popoverDisplaysAnySalaryRate
             || popoverDisplaysWorkProgress
+            || popoverDisplaysAnyOffTaskInformation
             || popoverDisplaysQuote
     }
 
     var resolvedMonthlySalaryCalculationMode: MonthlySalaryCalculationMode {
         monthlySalaryCalculationMode
+    }
+
+    var resolvedSalaryCycleMode: SalaryCycleMode {
+        salaryCycleMode
     }
 
     var resolvedMonthlySalaryCycleStartDay: Int {
@@ -1098,7 +1253,7 @@ struct SalaryConfig: Codable, Equatable {
         }
     }
 
-    /// 返回指定日期所在的薪资周期，支持每月非 1 号起算和 2 月短月兜底。
+    /// 返回指定日期所在的计薪周期，支持每月非 1 号起算和 2 月短月兜底。
     func salaryCyclePeriod(containing date: Date, calendar: Calendar = .current) -> SalaryCyclePeriod {
         let start = salaryCycleStart(containing: date, calendar: calendar)
         let nextStart = nextSalaryCycleStart(after: start, calendar: calendar)
@@ -1287,6 +1442,10 @@ struct SalaryConfig: Codable, Equatable {
         if !ShortcutKey.isRecordable(shortcutKeyCode) {
             shortcutKeyCode = ShortcutKey.defaultKeyCode
         }
+        offTaskShortcutModifiers = Int(offTaskShortcutModifierFlags.rawValue)
+        if !ShortcutKey.isRecordable(offTaskShortcutKeyCode) {
+            offTaskShortcutKeyCode = Self.defaultOffTaskShortcutKeyCode
+        }
         moneyDecimalPlaces = min(3, max(0, moneyDecimalPlaces))
         refreshIntervalSeconds = Self.normalizedRefreshInterval(refreshIntervalSeconds)
         if !Self.workProgressGridIntervalOptions.contains(workProgressGridMinutes) {
@@ -1356,7 +1515,7 @@ struct SalaryConfig: Codable, Equatable {
             return Date()
         }
 
-        let day = min(resolvedMonthlySalaryCycleStartDay, days.count)
+        let day = resolvedSalaryCycleMode == .naturalMonth ? 1 : min(resolvedMonthlySalaryCycleStartDay, days.count)
         let components = DateComponents(calendar: calendar, year: year, month: month, day: day)
         return calendar.startOfDay(for: calendar.date(from: components) ?? firstDate)
     }

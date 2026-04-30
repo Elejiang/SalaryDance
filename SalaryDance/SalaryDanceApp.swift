@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GlobalShortcutMonitor.shared.onToggle = {
             StatusBarController.shared.handleShortcutPress()
         }
+        GlobalShortcutMonitor.shared.onOffTaskToggle = {
+            StatusBarController.shared.toggleOffTaskStatus()
+        }
         GlobalShortcutMonitor.shared.start()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {

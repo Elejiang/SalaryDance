@@ -5,13 +5,22 @@ struct SalaryMetricItem: Identifiable, Equatable {
     let id: String
     let title: String
     let value: String
+    let isSensitive: Bool
+
+    init(id: String, title: String, value: String, isSensitive: Bool = true) {
+        self.id = id
+        self.title = title
+        self.value = value
+        self.isSensitive = isSensitive
+    }
 }
 
-/// 平衡薪资指标布局：每行最多 3 个，最后一行 1 个居中、2 个均匀铺开。
+/// 平衡薪资指标布局：默认每行最多 3 个，最后一行 1 个居中、2 个均匀铺开。
 struct BalancedSalaryMetricGrid: View {
     let metrics: [SalaryMetricItem]
     let isPrivate: Bool
     let tint: Color
+    var maxColumns: Int = 3
     var spacing: CGFloat = 8
     var rowHeight: CGFloat = 50
     var cornerRadius: CGFloat = 7
@@ -54,16 +63,20 @@ struct BalancedSalaryMetricGrid: View {
     }
 
     private var rows: [MetricRow] {
-        stride(from: 0, to: metrics.count, by: 3).map { start in
-            MetricRow(items: Array(metrics[start..<min(start + 3, metrics.count)]))
+        stride(from: 0, to: metrics.count, by: resolvedMaxColumns).map { start in
+            MetricRow(items: Array(metrics[start..<min(start + resolvedMaxColumns, metrics.count)]))
         }
     }
 
     private func cardWidth(itemCount: Int, availableWidth: CGFloat) -> CGFloat {
-        // 单个指标按三列宽度计算再居中，避免最后一行只有一个时被拉满。
-        let columns = itemCount == 1 ? 3 : max(1, min(3, itemCount))
+        // 单个指标按最大列宽计算再居中，避免最后一行只有一个时被拉满。
+        let columns = itemCount == 1 ? resolvedMaxColumns : max(1, min(resolvedMaxColumns, itemCount))
         let totalSpacing = spacing * CGFloat(columns - 1)
         return max(0, (availableWidth - totalSpacing) / CGFloat(columns))
+    }
+
+    private var resolvedMaxColumns: Int {
+        max(1, maxColumns)
     }
 
     private func metricCard(_ metric: SalaryMetricItem) -> some View {
@@ -73,7 +86,7 @@ struct BalancedSalaryMetricGrid: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
 
-            Text(isPrivate ? "***" : metric.value)
+            Text(isPrivate && metric.isSensitive ? "***" : metric.value)
                 .font(valueFont)
                 .foregroundColor(tint)
                 .monospacedDigit()

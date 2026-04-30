@@ -16,6 +16,8 @@
 |------|------|
 | `SalaryDance/SalaryDanceApp.swift` | App 入口，启动状态栏和全局快捷键 |
 | `SalaryDance/Models/SalaryConfig.swift` | 配置模型、薪资换算、时间段、快捷键动作 |
+| `SalaryDance/Models/SalaryWorkTimeline.swift` | 真实工作窗口和有效计薪区间 |
+| `SalaryDance/Models/OffTaskTracker.swift` | 摸鱼状态记录、实时结算和历史统计 |
 | `SalaryDance/ViewModels/SalaryViewModel.swift` | 今日收入、工作状态、进度、刷新定时器 |
 | `SalaryDance/Helpers/` | 节假日、全局快捷键、开机启动 |
 | `SalaryDance/Views/FloatingPanelView.swift` | 状态栏控制器、弹窗定位、设置窗口控制 |

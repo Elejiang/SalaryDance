@@ -316,7 +316,8 @@ struct SalaryDisplayView: View {
                 }
             }
         }
-        .padding(.vertical, 8)
+        .padding(.top, 7)
+        .padding(.bottom, 8)
         .padding(.horizontal, 10)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
         .overlay(

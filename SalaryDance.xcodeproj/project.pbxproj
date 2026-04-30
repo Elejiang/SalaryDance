@@ -17,10 +17,12 @@
 		52B8FE5F3E2C65CDB9F34E65 /* ChineseHolidays.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59F5C882988D9F1C8B26FCBC /* ChineseHolidays.swift */; };
 		5B1583309441BFBE1594C4D8 /* GlobalShortcutMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C73D598C60A8A2D23D93CEC /* GlobalShortcutMonitor.swift */; };
 		626696024D92F783B0436E3E /* SalaryViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22F49BB219B640174B7A34B9 /* SalaryViewModel.swift */; };
+		038079EEBA874D01109DAB4A /* SalaryWorkTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 971D4EAD040BC8F043842110 /* SalaryWorkTimeline.swift */; };
 		BF17C2A4F8A5B65E64D561FE /* SalaryConfig.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86D7153E111562164F40A7AC /* SalaryConfig.swift */; };
 		C624651B9998E8DEA4E2C460 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0D038BAF2B0A6524BF126527 /* Assets.xcassets */; };
 		D4C3A74DDCB68BE973A37231 /* SalaryDanceApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 519EB755BEBBC7D28F5AD11C /* SalaryDanceApp.swift */; };
 		E0FE9FE5261D4282653A301F /* SalaryDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1393381F2E6BB468025B3E3C /* SalaryDisplayView.swift */; };
+		E7ACDE49EEC2664D2BC8C769 /* OffTaskTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB51AC6C939ACC79F7CC4E0E /* OffTaskTracker.swift */; };
 		E2C2E7F44E726366442EBFE9 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E432D0111B62BBD135064BA /* SettingsView.swift */; };
 		F4A18E9C73624D5FB0F44A12 /* SettingsSupportViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4A18E9B73624D5FB0F44A12 /* SettingsSupportViews.swift */; };
 /* End PBXBuildFile section */
@@ -41,7 +43,9 @@
 		7E432D0111B62BBD135064BA /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		8223C8B85CE34C83E3F6BDE0 /* ShortcutRecorderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShortcutRecorderView.swift; sourceTree = "<group>"; };
 		86D7153E111562164F40A7AC /* SalaryConfig.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalaryConfig.swift; sourceTree = "<group>"; };
+		971D4EAD040BC8F043842110 /* SalaryWorkTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalaryWorkTimeline.swift; sourceTree = "<group>"; };
 		BBEF57E10F3349B8974532F5 /* SalaryDance.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SalaryDance.entitlements; sourceTree = "<group>"; };
+		BB51AC6C939ACC79F7CC4E0E /* OffTaskTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OffTaskTracker.swift; sourceTree = "<group>"; };
 		D7514B37F6BDAC8816C601B0 /* FloatingPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FloatingPanelView.swift; sourceTree = "<group>"; };
 		E11A0CCF0130E4FA62D4F624 /* PopoverView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PopoverView.swift; sourceTree = "<group>"; };
 		F4A18E9B73624D5FB0F44A12 /* SettingsSupportViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsSupportViews.swift; sourceTree = "<group>"; };
@@ -77,7 +81,9 @@
 		68B4C2CE4817D4B980014842 /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				BB51AC6C939ACC79F7CC4E0E /* OffTaskTracker.swift */,
 				86D7153E111562164F40A7AC /* SalaryConfig.swift */,
+				971D4EAD040BC8F043842110 /* SalaryWorkTimeline.swift */,
 				3A3B3C3D3E3F303132333402 /* WorkQuoteState.swift */,
 			);
 			path = Models;
@@ -200,8 +206,10 @@
 				2A2B3C4D5E6F7890ABCDEF01 /* PopoverPreviewView.swift in Sources */,
 				D4C3A74DDCB68BE973A37231 /* SalaryDanceApp.swift in Sources */,
 				BF17C2A4F8A5B65E64D561FE /* SalaryConfig.swift in Sources */,
+				038079EEBA874D01109DAB4A /* SalaryWorkTimeline.swift in Sources */,
 				E0FE9FE5261D4282653A301F /* SalaryDisplayView.swift in Sources */,
 				626696024D92F783B0436E3E /* SalaryViewModel.swift in Sources */,
+				E7ACDE49EEC2664D2BC8C769 /* OffTaskTracker.swift in Sources */,
 				E2C2E7F44E726366442EBFE9 /* SettingsView.swift in Sources */,
 				F4A18E9C73624D5FB0F44A12 /* SettingsSupportViews.swift in Sources */,
 				162C275F50C0E2519FD8314B /* ShortcutRecorderView.swift in Sources */,

@@ -10,6 +10,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
     @Published private(set) var nextShortcutAction: ShortcutAction = ShortcutAction.defaultSequence[0]
 
     private let viewModel = SalaryViewModel()
+    private let offTaskTracker = OffTaskTracker.shared
     private let popover = NSPopover()
     private let statusItemModel = StatusBarItemModel()
     private lazy var statusItemHostingView = NSHostingView(rootView: StatusBarItemContent(model: statusItemModel))
@@ -79,6 +80,16 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             }
             .store(in: &cancellables)
 
+        offTaskTracker.$sessions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.viewModel.refreshNow()
+                self?.updateStatusItemTitle()
+                self?.updateRefreshCadence()
+                self?.updatePopoverContentSize()
+            }
+            .store(in: &cancellables)
+
         updateStatusItemTitle()
         updateNextShortcutAction()
         updateRefreshCadence()
@@ -124,6 +135,13 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
 
     func quitApplication() {
         NSApp.terminate(nil)
+    }
+
+    func toggleOffTaskStatus() {
+        offTaskTracker.toggle(config: SalaryConfigManager.shared.config)
+        viewModel.refreshNow()
+        updateStatusItemTitle()
+        updateRefreshCadence()
     }
 
     @objc private func statusItemClicked() {
@@ -334,7 +352,10 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
               let button = statusItem.button else { return }
         let config = SalaryConfigManager.shared.config
         let showsEarnings = config.displaysEarningsInStatusBar
+        let showsOffTaskIcon = config.statusBarDisplaysOffTaskStatusIcon
+        let usesHostedContent = showsEarnings || showsOffTaskIcon
         let showsIcon = !showsEarnings || config.statusBarDisplaysAppIcon
+        button.toolTip = statusItemTooltip(config: config, showsOffTaskIcon: showsOffTaskIcon)
 
         button.title = ""
         button.attributedTitle = NSAttributedString(string: "")
@@ -347,13 +368,14 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             && lastStatusAmountText != amount
         let animationStyle = config.resolvedStatusBarSalaryAnimationStyle
 
-        if !showsEarnings {
+        if !usesHostedContent {
             statusItem.length = NSStatusItem.squareLength
             statusItemHostingView.isHidden = true
             button.image = NSImage(systemSymbolName: "yensign.circle.fill", accessibilityDescription: "薪动")
             button.imagePosition = .imageOnly
             statusItemModel.showsIcon = false
             statusItemModel.amount = nil
+            statusItemModel.showsOffTaskIcon = false
             lastStatusAmountText = ""
             rememberVisibleStatusItemFrame(from: button)
             return
@@ -364,7 +386,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         statusItemHostingView.isHidden = false
 
         let height = NSStatusBar.system.thickness
-        let width = statusItemWidth(showsIcon: showsIcon, amount: amount)
+        let width = statusItemWidth(showsIcon: showsIcon, amount: showsEarnings ? amount : nil, showsOffTaskIcon: showsOffTaskIcon)
         statusItem.length = width
         statusItemHostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
 
@@ -373,6 +395,8 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             self.statusItemModel.amount = showsEarnings ? amount : nil
             self.statusItemModel.color = config.statusBarSalaryNSColor
             self.statusItemModel.animationStyle = animationStyle
+            self.statusItemModel.showsOffTaskIcon = showsOffTaskIcon
+            self.statusItemModel.offTaskIsActive = self.offTaskTracker.isActive
         }
 
         if shouldAnimate, animationStyle == .rolling {
@@ -389,17 +413,24 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         rememberVisibleStatusItemFrame(from: button)
     }
 
-    /// 按实际金额文本测量状态栏宽度，保证数字滚动时不截断。
-    private func statusItemWidth(showsIcon: Bool, amount: String?) -> CGFloat {
-        guard let amount else {
-            return NSStatusItem.squareLength
+    private func statusItemTooltip(config: SalaryConfig, showsOffTaskIcon: Bool) -> String {
+        guard showsOffTaskIcon else { return "薪动" }
+
+        if offTaskTracker.isActive {
+            return "薪动 · 摸鱼中"
         }
 
+        return "薪动 · \(offTaskTracker.startAvailability(config: config).shortMessage)"
+    }
+
+    /// 按实际金额文本测量状态栏宽度，保证数字滚动时不截断。
+    private func statusItemWidth(showsIcon: Bool, amount: String?, showsOffTaskIcon: Bool) -> CGFloat {
         let font = NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
-        let textWidth = ceil((amount as NSString).size(withAttributes: [.font: font]).width)
+        let textWidth = amount.map { ceil(($0 as NSString).size(withAttributes: [.font: font]).width) } ?? 0
         let iconWidth: CGFloat = showsIcon ? 16 + 4 : 0
+        let offTaskIconWidth: CGFloat = showsOffTaskIcon ? 16 + (amount == nil && !showsIcon ? 0 : 4) : 0
         let horizontalPadding: CGFloat = 12
-        return max(NSStatusItem.squareLength, ceil(textWidth + iconWidth + horizontalPadding))
+        return max(NSStatusItem.squareLength, ceil(textWidth + iconWidth + offTaskIconWidth + horizontalPadding))
     }
 
     /// 记录最近一次可用的状态栏坐标，给 Hidden Bar 隐藏后的弹窗定位兜底。
@@ -465,7 +496,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
     /// 按当前展示状态调整刷新频率，实时展示时高频，后台空闲时可降频。
     private func updateRefreshCadence() {
         let config = SalaryConfigManager.shared.config
-        let needsLiveUpdates = popover.isShown || config.displaysEarningsInStatusBar
+        let needsLiveUpdates = popover.isShown || config.displaysEarningsInStatusBar || offTaskTracker.isActive
         // 没有实时展示时降到低频刷新；如果用户本来设置得更慢，则尊重更慢的配置。
         let interval: TimeInterval = needsLiveUpdates || !config.usesLowFrequencyUpdatesWhenIdle
             ? config.resolvedRefreshIntervalSeconds
@@ -476,22 +507,21 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
     /// 弹窗高度由 SwiftUI fittingSize 和配置估算共同决定，防止内容被截断。
     private func updatePopoverContentSize() {
         let fallbackSize = preferredPopoverContentSize(for: SalaryConfigManager.shared.config)
-        let fittingHeight: CGFloat
+        let measuredHeight: CGFloat?
 
         if let contentView = popover.contentViewController?.view {
             contentView.layoutSubtreeIfNeeded()
             let fittingSize = contentView.fittingSize
-            fittingHeight = fittingSize.height.isFinite && fittingSize.height > 0
-                ? fittingSize.height
-                : fallbackSize.height
+            measuredHeight = fittingSize.height.isFinite && fittingSize.height > 0 ? fittingSize.height : nil
         } else {
-            fittingHeight = fallbackSize.height
+            measuredHeight = nil
         }
 
+        let targetHeight = measuredHeight ?? fallbackSize.height
         let maxHeight = max(220, (NSScreen.main?.visibleFrame.height ?? 700) - 72)
         popover.contentSize = NSSize(
             width: popoverWidth,
-            height: min(maxHeight, max(fallbackSize.height, ceil(fittingHeight)))
+            height: min(maxHeight, max(80, ceil(targetHeight)))
         )
     }
 
@@ -542,7 +572,12 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             height += salaryHeight
         }
 
-        if showsSalaryBlock && config.popoverDisplaysQuote {
+        if config.popoverDisplaysOffTaskStatus {
+            outerSections += 1
+            height += 94
+        }
+
+        if (showsSalaryBlock || config.popoverDisplaysOffTaskStatus) && config.popoverDisplaysQuote {
             outerSections += 1
             height += 1
         }
@@ -607,6 +642,8 @@ private final class StatusBarItemModel: ObservableObject {
     @Published var amount: String?
     @Published var color: NSColor = .labelColor
     @Published var animationStyle: StatusBarSalaryAnimationStyle = .rolling
+    @Published var showsOffTaskIcon = false
+    @Published var offTaskIsActive = false
 }
 
 /// 自定义状态栏内容，保持最初的紧凑格式，只在金额变化时做数字滚动。
@@ -614,7 +651,7 @@ private struct StatusBarItemContent: View {
     @ObservedObject var model: StatusBarItemModel
 
     var body: some View {
-        HStack(spacing: model.showsIcon && model.amount != nil ? 4 : 0) {
+        HStack(spacing: statusItemSpacing) {
             if model.showsIcon {
                 Image(systemName: "yensign.circle.fill")
                     .font(.system(size: NSFont.systemFontSize + 1, weight: .semibold))
@@ -625,10 +662,22 @@ private struct StatusBarItemContent: View {
             if let amount = model.amount {
                 amountText(amount)
             }
+
+            if model.showsOffTaskIcon {
+                Image(systemName: model.offTaskIsActive ? "fish.fill" : "fish")
+                    .font(.system(size: NSFont.systemFontSize, weight: .semibold))
+                    .foregroundStyle(model.offTaskIsActive ? Color.orange : Color.secondary)
+                    .frame(width: 16, height: 16)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .fixedSize()
         .allowsHitTesting(false)
+    }
+
+    private var statusItemSpacing: CGFloat {
+        let visibleCount = [model.showsIcon, model.amount != nil, model.showsOffTaskIcon].filter { $0 }.count
+        return visibleCount > 1 ? 4 : 0
     }
 
     /// 数字滚动复用 SwiftUI numericText，只让变动字符产生过渡。

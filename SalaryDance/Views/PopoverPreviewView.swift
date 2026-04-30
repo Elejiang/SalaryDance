@@ -3,14 +3,29 @@ import SwiftUI
 /// 设置页右侧弹窗预览，尽量复用真实弹窗的布局组件和展示规则。
 struct PopoverPreviewView: View {
     let config: SalaryConfig
+    @StateObject private var previewViewModel: SalaryViewModel
+    @State private var isPrivate: Bool
 
-    private let previewProgress = 0.42
+    private static let previewProgress = 0.42
+
+    init(config: SalaryConfig) {
+        self.config = config
+        let viewModel = SalaryViewModel(startsTimer: false)
+        Self.applyPreviewSnapshot(to: viewModel, config: config)
+        _previewViewModel = StateObject(wrappedValue: viewModel)
+        _isPrivate = State(initialValue: config.opensPrivatePopoverFromStatusItemClick)
+    }
 
     var body: some View {
-        let salaryTint = Color(nsColor: config.popoverSalaryNSColor)
-        let isPrivate = config.opensPrivatePopoverFromStatusItemClick
-        let dailySalary = config.effectiveDailySalary(on: Date())
-        let previewEarnings = config.hasCompensation ? dailySalary * previewProgress : 0
+        let showsSalaryBlock = config.popoverDisplaysWorkStatus
+            || config.popoverDisplaysCurrentEarnings
+            || config.popoverDisplaysRemainingEarnings
+            || config.popoverDisplaysAnySalaryRate
+            || config.popoverDisplaysWorkProgress
+        let showsSalarySensitiveContent = config.popoverDisplaysCurrentEarnings
+            || config.popoverDisplaysRemainingEarnings
+            || config.popoverDisplaysAnySalaryRate
+        let showsOffTaskSensitiveContent = config.popoverDisplaysAnyOffTaskSalaryMetric
 
         VStack(alignment: .leading, spacing: 8) {
             Text("弹窗")
@@ -18,42 +33,30 @@ struct PopoverPreviewView: View {
                 .foregroundColor(.secondary)
 
             VStack(spacing: 10) {
-                if config.popoverDisplaysWorkStatus || config.popoverDisplaysWorkProgress {
-                    previewStatusProgress
-                }
-
-                if config.popoverDisplaysCurrentEarnings || config.popoverDisplaysRemainingEarnings {
-                    VStack(spacing: 1) {
-                        if config.popoverDisplaysCurrentEarnings {
-                            Text(isPrivate ? "¥***" : formatMoney(previewEarnings))
-                                .font(.system(size: 30, weight: .bold, design: .monospaced))
-                                .foregroundColor(salaryTint)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                                .contentTransition(.numericText())
-                        }
-
-                        if config.popoverDisplaysRemainingEarnings {
-                            remainingEarningsPreview(
-                                amount: max(0, dailySalary - previewEarnings),
-                                isPrivate: isPrivate,
-                                salaryTint: salaryTint
-                            )
-                        }
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-
-                if config.popoverDisplaysAnySalaryRate {
-                    BalancedSalaryMetricGrid(
-                        metrics: previewMetrics,
+                if showsSalaryBlock {
+                    SalaryDisplayView(
+                        viewModel: previewViewModel,
                         isPrivate: isPrivate,
-                        tint: salaryTint,
-                        spacing: 7,
-                        rowHeight: 38,
-                        cornerRadius: 6,
-                        valueFont: .caption.weight(.semibold),
-                        valueMinimumScaleFactor: 0.72
+                        showsStatus: config.popoverDisplaysWorkStatus,
+                        showsEarnings: config.popoverDisplaysCurrentEarnings,
+                        showsRemainingEarnings: config.popoverDisplaysRemainingEarnings,
+                        showsSecondSalary: config.popoverDisplaysSecondSalary,
+                        showsMinuteSalary: config.popoverDisplaysMinuteSalary,
+                        showsHourlySalary: config.popoverDisplaysHourlySalary,
+                        showsDailySalary: config.popoverDisplaysDailySalary,
+                        showsMonthlySalary: config.popoverDisplaysMonthlySalary,
+                        showsYearlySalary: config.popoverDisplaysYearlySalary,
+                        showsWorkProgress: config.popoverDisplaysWorkProgress,
+                        earningsActionSystemImage: showsSalarySensitiveContent ? (isPrivate ? "eye" : "eye.slash") : nil,
+                        earningsAction: showsSalarySensitiveContent ? {
+                            isPrivate.toggle()
+                        } : nil
+                    )
+                }
+
+                if config.popoverDisplaysAnyOffTaskInformation {
+                    offTaskPreviewPanel(
+                        showsPrivacyAction: showsOffTaskSensitiveContent && !showsSalarySensitiveContent
                     )
                 }
 
@@ -64,7 +67,9 @@ struct PopoverPreviewView: View {
                         .lineLimit(1)
                 }
             }
-            .padding(12)
+            .padding(.top, 10)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
             .frame(width: 260)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
             .overlay(
@@ -74,91 +79,78 @@ struct PopoverPreviewView: View {
             .shadow(color: .black.opacity(0.08), radius: 12, x: 0, y: 6)
         }
         .frame(width: 280, alignment: .topLeading)
-    }
-
-    /// 用固定 42% 进度模拟一个工作中的场景，方便用户即时对比展示设置。
-    private var previewStatusProgress: some View {
-        let timelineTint = Color(nsColor: config.workProgressNSColor)
-        let progressText = formatProgressPercent(previewProgress)
-
-        return VStack(spacing: 7) {
-            HStack(spacing: 8) {
-                Image(systemName: "flame.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.orange)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(.orange.opacity(0.14)))
-
-                if config.popoverDisplaysWorkStatus {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("工作中")
-                            .font(.caption.weight(.semibold))
-                        Text("距下班 4时12分")
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Spacer()
-
-                if config.popoverDisplaysWorkProgress {
-                    Text(progressText)
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(timelineTint)
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .animation(.easeInOut(duration: 0.15), value: progressText)
-                }
-            }
-
-            if config.popoverDisplaysWorkProgress {
-                TimelinePreviewBar(config: config, progress: previewProgress, workTime: config.effectiveWorkTime(on: Date()))
-                    .frame(height: config.workProgressDisplaysSegmentLabels ? 32 : 14)
-            }
+        .onAppear {
+            Self.applyPreviewSnapshot(to: previewViewModel, config: config)
+            isPrivate = config.opensPrivatePopoverFromStatusItemClick
         }
-        .padding(8)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.18), lineWidth: 1))
-    }
-
-    private func remainingEarningsPreview(amount: Double, isPrivate: Bool, salaryTint: Color) -> some View {
-        HStack(spacing: 0) {
-            Text("今天还剩 ")
-                .foregroundColor(.secondary)
-            Text(isPrivate ? "¥***" : formatMoney(amount))
-                .foregroundColor(salaryTint)
-                .monospacedDigit()
-                .contentTransition(.numericText())
-            Text(" 没赚")
-                .foregroundColor(.secondary)
+        .onChange(of: config) { _, newValue in
+            Self.applyPreviewSnapshot(to: previewViewModel, config: newValue)
+            isPrivate = newValue.opensPrivatePopoverFromStatusItemClick
         }
-        .font(.caption2)
-        .lineLimit(1)
-        .minimumScaleFactor(0.82)
     }
 
-    /// 根据弹窗展示开关生成预览指标，顺序必须和真实弹窗保持一致。
-    private var previewMetrics: [SalaryMetricItem] {
-        var metrics: [SalaryMetricItem] = []
+    private static func applyPreviewSnapshot(to viewModel: SalaryViewModel, config: SalaryConfig) {
         let now = Date()
-        if config.popoverDisplaysSecondSalary {
-            metrics.append(SalaryMetricItem(id: "second", title: "秒薪", value: formatMoney(config.salaryPerSecond(on: now))))
+        let dailySalary = config.effectiveDailySalary(on: now)
+        let workTime = config.effectiveWorkTime(on: now)
+        viewModel.status = .working
+        viewModel.statusText = "距下班 4时12分"
+        viewModel.progress = Self.previewProgress
+        viewModel.effectiveDailySalary = dailySalary
+        viewModel.effectiveWorkTime = workTime
+        viewModel.effectivePaidWorkMinutes = config.paidWorkMinutes(workTime: workTime)
+        viewModel.earningsPerSecond = config.salaryPerSecond(on: now)
+        viewModel.todayEarnings = config.hasCompensation ? dailySalary * Self.previewProgress : 0
+    }
+
+    private func offTaskPreviewPanel(showsPrivacyAction: Bool) -> some View {
+        OffTaskPopoverPanelView(
+            showsStatus: config.popoverDisplaysOffTaskStatus,
+            isActive: false,
+            canStart: true,
+            isPrivate: isPrivate,
+            subtitle: "未开启",
+            metrics: previewOffTaskMetrics(dailySalary: previewViewModel.effectiveDailySalary),
+            finishedSummary: nil,
+            showsPrivacyAction: showsPrivacyAction,
+            toggleHelp: "预览中不会改写真实摸鱼记录。",
+            privacyAction: {
+                isPrivate.toggle()
+            },
+            toggleAction: {}
+        )
+    }
+
+    private func previewOffTaskMetrics(dailySalary: Double) -> [SalaryMetricItem] {
+        let baseAmount = config.hasCompensation ? dailySalary * 0.06 : 0
+        let cycleTitle = config.resolvedSalaryCycleMode == .naturalMonth ? "本月" : "本周期"
+        var metrics: [SalaryMetricItem] = []
+
+        if config.popoverDisplaysTodayOffTaskSalary {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskTodaySalary", title: "本日摸鱼薪资", value: formatMoney(baseAmount)))
         }
-        if config.popoverDisplaysMinuteSalary {
-            metrics.append(SalaryMetricItem(id: "minute", title: "分薪", value: formatMoney(config.salaryPerMinute(on: now))))
+        if config.popoverDisplaysWeekOffTaskSalary {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskWeekSalary", title: "本周摸鱼薪资", value: formatMoney(baseAmount * 3.2)))
         }
-        if config.popoverDisplaysHourlySalary {
-            metrics.append(SalaryMetricItem(id: "hour", title: "时薪", value: formatMoney(config.salaryPerHour(on: now))))
+        if config.popoverDisplaysSalaryCycleOffTaskSalary {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskCycleSalary", title: "\(cycleTitle)摸鱼薪资", value: formatMoney(baseAmount * 11.4)))
         }
-        if config.popoverDisplaysDailySalary {
-            metrics.append(SalaryMetricItem(id: "day", title: "日薪", value: formatMoney(config.effectiveDailySalary(on: now))))
+        if config.popoverDisplaysHistoricalOffTaskSalary {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskTotalSalary", title: "历史摸鱼薪资", value: formatMoney(baseAmount * 28.6)))
         }
-        if config.popoverDisplaysMonthlySalary {
-            metrics.append(SalaryMetricItem(id: "month", title: "月薪", value: formatMoney(config.monthlySalary)))
+        if config.popoverDisplaysTodayOffTaskDuration {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskTodayDuration", title: "本日摸鱼时长", value: "18分", isSensitive: false))
         }
-        if config.popoverDisplaysYearlySalary {
-            metrics.append(SalaryMetricItem(id: "year", title: "年薪", value: formatMoney(config.yearlySalary)))
+        if config.popoverDisplaysWeekOffTaskDuration {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskWeekDuration", title: "本周摸鱼时长", value: "1时42分", isSensitive: false))
         }
+        if config.popoverDisplaysSalaryCycleOffTaskDuration {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskCycleDuration", title: "\(cycleTitle)摸鱼时长", value: "6时18分", isSensitive: false))
+        }
+        if config.popoverDisplaysHistoricalOffTaskDuration {
+            metrics.append(SalaryMetricItem(id: "previewOffTaskTotalDuration", title: "历史摸鱼时长", value: "15时40分", isSensitive: false))
+        }
+
         return metrics
     }
 
@@ -167,7 +159,4 @@ struct PopoverPreviewView: View {
         return showCurrencySymbol ? "¥\(amount)" : amount
     }
 
-    private func formatProgressPercent(_ progress: Double) -> String {
-        String(format: "%.\(config.workProgressDisplayDecimalPlaces)f%%", progress * 100)
-    }
 }

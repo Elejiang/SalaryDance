@@ -24,13 +24,16 @@ final class SalaryViewModel: ObservableObject {
     private var timer: Timer?
     private var updateInterval: TimeInterval = 1
     private let configManager = SalaryConfigManager.shared
+    private let offTaskTracker = OffTaskTracker.shared
 
     var config: SalaryConfig {
         configManager.config
     }
 
-    init() {
-        startTimer()
+    init(startsTimer: Bool = true) {
+        if startsTimer {
+            startTimer()
+        }
     }
 
     deinit {
@@ -91,6 +94,7 @@ final class SalaryViewModel: ObservableObject {
 
     /// 只在值实际变化时发布，降低 SwiftUI 重绘频率。
     private func update(force: Bool) {
+        offTaskTracker.syncWithWorkState(config: configManager.config)
         let snapshot = makeSnapshot()
 
         if force || abs(todayEarnings - snapshot.todayEarnings) > 0.0001 {
