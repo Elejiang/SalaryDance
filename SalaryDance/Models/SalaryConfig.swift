@@ -4,49 +4,172 @@ import Carbon.HIToolbox
 
 /// 用户输入金额的薪资口径。计算时统一先折算为日薪。
 enum SalaryType: String, Codable, CaseIterable {
-    case monthly = "月薪"
-    case daily = "日薪"
-    case yearly = "年薪"
+    case monthly
+    case daily
+    case yearly
+
+    var title: String {
+        switch self {
+        case .monthly: return "月薪"
+        case .daily: return "日薪"
+        case .yearly: return "年薪"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.monthly.rawValue, "月薪":
+            self = .monthly
+        case Self.daily.rawValue, "日薪":
+            self = .daily
+        case Self.yearly.rawValue, "年薪":
+            self = .yearly
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown SalaryType: \(value)"))
+        }
+    }
 }
 
 /// 决定哪些自然日参与计薪。
 enum WorkDayRule: String, Codable, CaseIterable {
-    case weekdaysOnly = "仅工作日"
-    case everyday = "每天都计薪"
-    case custom = "自定义工作日"
+    case weekdaysOnly
+    case everyday
+    case custom
+
+    var title: String {
+        switch self {
+        case .weekdaysOnly: return "仅工作日"
+        case .everyday: return "每天都计薪"
+        case .custom: return "自定义工作日"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.weekdaysOnly.rawValue, "仅工作日":
+            self = .weekdaysOnly
+        case Self.everyday.rawValue, "每天都计薪":
+            self = .everyday
+        case Self.custom.rawValue, "自定义工作日":
+            self = .custom
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown WorkDayRule: \(value)"))
+        }
+    }
 }
 
 /// 月薪和日薪互相折算时使用的计薪日来源。
 enum MonthlySalaryCalculationMode: String, Codable, CaseIterable, Identifiable {
-    case fixedAverage = "固定指定天数"
-    case salaryCycleWorkdays = "按薪资周期计薪日"
+    case fixedAverage
+    case salaryCycleWorkdays
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .fixedAverage: return "固定指定天数"
+        case .salaryCycleWorkdays: return "按薪资周期计薪日"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.fixedAverage.rawValue, "固定指定天数":
+            self = .fixedAverage
+        case Self.salaryCycleWorkdays.rawValue, "按薪资周期计薪日":
+            self = .salaryCycleWorkdays
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown MonthlySalaryCalculationMode: \(value)"))
+        }
+    }
 }
 
 /// 补贴的发放口径。按日补贴直接进入日薪，按月补贴再决定是否平摊到日薪。
 enum SalarySubsidyType: String, Codable, CaseIterable, Identifiable {
-    case daily = "按日补贴"
-    case monthly = "按月补贴"
+    case daily
+    case monthly
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .daily: return "按日补贴"
+        case .monthly: return "按月补贴"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.daily.rawValue, "按日补贴":
+            self = .daily
+        case Self.monthly.rawValue, "按月补贴":
+            self = .monthly
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown SalarySubsidyType: \(value)"))
+        }
+    }
 }
 
 /// 按月补贴的计入方式：只汇入月薪，或拆成每天收入参与实时累计。
 enum MonthlySubsidyApplicationMode: String, Codable, CaseIterable, Identifiable {
-    case addToMonthlySalary = "加到月薪"
-    case spreadToDailySalary = "平摊到每天"
+    case addToMonthlySalary
+    case spreadToDailySalary
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .addToMonthlySalary: return "加到月薪"
+        case .spreadToDailySalary: return "平摊到每天"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.addToMonthlySalary.rawValue, "加到月薪":
+            self = .addToMonthlySalary
+        case Self.spreadToDailySalary.rawValue, "平摊到每天":
+            self = .spreadToDailySalary
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown MonthlySubsidyApplicationMode: \(value)"))
+        }
+    }
 }
 
 /// 按月补贴平摊到每天时使用的分母来源。
 enum MonthlySubsidyProrationMode: String, Codable, CaseIterable, Identifiable {
-    case salaryCycleTotalDays = "周期内总天数"
-    case fixedDays = "固定天数"
-    case salaryCycleWorkdays = "周期内工作日天数"
+    case salaryCycleTotalDays
+    case fixedDays
+    case salaryCycleWorkdays
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .salaryCycleTotalDays: return "周期内总天数"
+        case .fixedDays: return "固定天数"
+        case .salaryCycleWorkdays: return "周期内工作日天数"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.salaryCycleTotalDays.rawValue, "周期内总天数":
+            self = .salaryCycleTotalDays
+        case Self.fixedDays.rawValue, "固定天数":
+            self = .fixedDays
+        case Self.salaryCycleWorkdays.rawValue, "周期内工作日天数":
+            self = .salaryCycleWorkdays
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown MonthlySubsidyProrationMode: \(value)"))
+        }
+    }
 }
 
 /// 单条补贴配置。金额始终保存为非负数，按月补贴的固定平摊天数默认 21.75。
@@ -61,6 +184,33 @@ struct SalarySubsidy: Codable, Equatable, Identifiable {
     var monthlyApplicationMode: MonthlySubsidyApplicationMode = .spreadToDailySalary
     var monthlyProrationMode: MonthlySubsidyProrationMode = .fixedDays
     var fixedProrationDays: Double = Self.defaultFixedProrationDays
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case enabled
+        case name
+        case type
+        case amount
+        case monthlyApplicationMode
+        case monthlyProrationMode
+        case fixedProrationDays
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = SalarySubsidy()
+
+        id = container.decodeLossy(UUID.self, forKey: .id, default: defaults.id)
+        enabled = container.decodeLossy(Bool.self, forKey: .enabled, default: defaults.enabled)
+        name = container.decodeLossy(String.self, forKey: .name, default: defaults.name)
+        type = container.decodeLossy(SalarySubsidyType.self, forKey: .type, default: defaults.type)
+        amount = container.decodeLossy(Double.self, forKey: .amount, default: defaults.amount)
+        monthlyApplicationMode = container.decodeLossy(MonthlySubsidyApplicationMode.self, forKey: .monthlyApplicationMode, default: defaults.monthlyApplicationMode)
+        monthlyProrationMode = container.decodeLossy(MonthlySubsidyProrationMode.self, forKey: .monthlyProrationMode, default: defaults.monthlyProrationMode)
+        fixedProrationDays = container.decodeLossy(Double.self, forKey: .fixedProrationDays, default: defaults.fixedProrationDays)
+    }
 
     var displayName: String {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -78,11 +228,33 @@ struct SalarySubsidy: Codable, Equatable, Identifiable {
 
 /// 状态栏实时金额的数字变化效果。
 enum StatusBarSalaryAnimationStyle: String, Codable, CaseIterable, Identifiable {
-    case rolling = "滚动"
-    case bounce = "跳动"
-    case none = "关闭"
+    case rolling
+    case bounce
+    case none
 
     var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .rolling: return "滚动"
+        case .bounce: return "跳动"
+        case .none: return "关闭"
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        switch value {
+        case Self.rolling.rawValue, "滚动":
+            self = .rolling
+        case Self.bounce.rawValue, "跳动":
+            self = .bounce
+        case Self.none.rawValue, "关闭":
+            self = .none
+        default:
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Unknown StatusBarSalaryAnimationStyle: \(value)"))
+        }
+    }
 }
 
 /// 快捷键动作序列里的单个动作。
@@ -252,7 +424,22 @@ enum SalaryColor {
     }
 }
 
-/// App 的完整配置模型。新增配置优先直接加字段，不做旧字段迁移。
+/// 配置兼容解码工具：新增字段缺失或单个字段损坏时使用默认值，避免整份配置被重置。
+private extension KeyedDecodingContainer {
+    func decodeLossy<Value: Decodable>(_ type: Value.Type, forKey key: Key, default defaultValue: Value) -> Value {
+        (try? decodeIfPresent(type, forKey: key)) ?? defaultValue
+    }
+
+    func decodeLossyOptional<Value: Decodable>(_ type: Value.Type, forKey key: Key) -> Value? {
+        do {
+            return try decodeIfPresent(type, forKey: key)
+        } catch {
+            return nil
+        }
+    }
+}
+
+/// App 的完整配置模型。新增字段必须提供兼容解码默认值，避免旧版本配置整体失效。
 struct SalaryConfig: Codable, Equatable {
     static let refreshIntervalRange: ClosedRange<Double> = 0.5...3600
     static let workProgressGridIntervalOptions = [15, 30, 60, 120]
@@ -314,6 +501,119 @@ struct SalaryConfig: Codable, Equatable {
     var holidayFutureColorHex: String = SalaryColor.defaultHolidayFutureHex
     var popoverSalaryColorHex: String = SalaryColor.defaultPopoverSalaryHex
     var statusBarSalaryColorHex: String? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case salaryType
+        case salaryAmount
+        case monthlySalaryCalculationMode
+        case fixedMonthlyWorkdays
+        case monthlySalaryCycleStartDay
+        case subsidies
+        case workTime
+        case lunchBreakEnabled
+        case lunchBreak
+        case dinnerBreakEnabled
+        case dinnerBreak
+        case workDayRule
+        case customWorkDays
+        case launchAtLogin
+        case shortcutModifiers
+        case shortcutKeyCode
+        case shortcutEnabled
+        case statusBarShowsEarnings
+        case popoverShowsCurrentEarnings
+        case popoverShowsRemainingEarnings
+        case popoverShowsWorkStatus
+        case popoverShowsSecondSalary
+        case popoverShowsMinuteSalary
+        case popoverShowsHourlySalary
+        case popoverShowsDailySalary
+        case popoverShowsMonthlySalary
+        case popoverShowsYearlySalary
+        case popoverShowsWorkProgress
+        case popoverShowsQuote
+        case statusItemClickShowsPrivatePopover
+        case statusBarShowsAppIcon
+        case statusBarShowsCurrencySymbol
+        case statusBarSalaryAnimationStyle
+        case moneyDecimalPlaces
+        case shortcutActionSequence
+        case idleUsesLowFrequencyUpdates
+        case refreshIntervalSeconds
+        case lunchBreakShowsColor
+        case dinnerBreakShowsColor
+        case workProgressShowsGrid
+        case workProgressShowsSegmentLabels
+        case workProgressGridMinutes
+        case workProgressDecimalPlaces
+        case breakTimeCountsAsPaidWork
+        case workProgressColorHex
+        case lunchBreakColorHex
+        case dinnerBreakColorHex
+        case holidayPastColorHex
+        case holidayFutureColorHex
+        case popoverSalaryColorHex
+        case statusBarSalaryColorHex
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = SalaryConfig()
+
+        salaryType = container.decodeLossy(SalaryType.self, forKey: .salaryType, default: defaults.salaryType)
+        salaryAmount = container.decodeLossy(Double.self, forKey: .salaryAmount, default: defaults.salaryAmount)
+        monthlySalaryCalculationMode = container.decodeLossy(MonthlySalaryCalculationMode.self, forKey: .monthlySalaryCalculationMode, default: defaults.monthlySalaryCalculationMode)
+        fixedMonthlyWorkdays = container.decodeLossy(Double.self, forKey: .fixedMonthlyWorkdays, default: defaults.fixedMonthlyWorkdays)
+        monthlySalaryCycleStartDay = container.decodeLossy(Int.self, forKey: .monthlySalaryCycleStartDay, default: defaults.monthlySalaryCycleStartDay)
+        subsidies = container.decodeLossy([SalarySubsidy].self, forKey: .subsidies, default: defaults.subsidies)
+        workTime = container.decodeLossy(TimeRange.self, forKey: .workTime, default: defaults.workTime)
+        lunchBreakEnabled = container.decodeLossy(Bool.self, forKey: .lunchBreakEnabled, default: defaults.lunchBreakEnabled)
+        lunchBreak = container.decodeLossy(TimeRange.self, forKey: .lunchBreak, default: defaults.lunchBreak)
+        dinnerBreakEnabled = container.decodeLossy(Bool.self, forKey: .dinnerBreakEnabled, default: defaults.dinnerBreakEnabled)
+        dinnerBreak = container.decodeLossy(TimeRange.self, forKey: .dinnerBreak, default: defaults.dinnerBreak)
+        workDayRule = container.decodeLossy(WorkDayRule.self, forKey: .workDayRule, default: defaults.workDayRule)
+        customWorkDays = container.decodeLossy(Set<Int>.self, forKey: .customWorkDays, default: defaults.customWorkDays)
+        launchAtLogin = container.decodeLossy(Bool.self, forKey: .launchAtLogin, default: defaults.launchAtLogin)
+        shortcutModifiers = container.decodeLossy(Int.self, forKey: .shortcutModifiers, default: defaults.shortcutModifiers)
+        shortcutKeyCode = container.decodeLossy(UInt16.self, forKey: .shortcutKeyCode, default: defaults.shortcutKeyCode)
+        shortcutEnabled = container.decodeLossy(Bool.self, forKey: .shortcutEnabled, default: defaults.shortcutEnabled)
+        statusBarShowsEarnings = container.decodeLossy(Bool.self, forKey: .statusBarShowsEarnings, default: defaults.statusBarShowsEarnings)
+        popoverShowsCurrentEarnings = container.decodeLossy(Bool.self, forKey: .popoverShowsCurrentEarnings, default: defaults.popoverShowsCurrentEarnings)
+        popoverShowsRemainingEarnings = container.decodeLossy(Bool.self, forKey: .popoverShowsRemainingEarnings, default: defaults.popoverShowsRemainingEarnings)
+        popoverShowsWorkStatus = container.decodeLossy(Bool.self, forKey: .popoverShowsWorkStatus, default: defaults.popoverShowsWorkStatus)
+        popoverShowsSecondSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsSecondSalary, default: defaults.popoverShowsSecondSalary)
+        popoverShowsMinuteSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsMinuteSalary, default: defaults.popoverShowsMinuteSalary)
+        popoverShowsHourlySalary = container.decodeLossy(Bool.self, forKey: .popoverShowsHourlySalary, default: defaults.popoverShowsHourlySalary)
+        popoverShowsDailySalary = container.decodeLossy(Bool.self, forKey: .popoverShowsDailySalary, default: defaults.popoverShowsDailySalary)
+        popoverShowsMonthlySalary = container.decodeLossy(Bool.self, forKey: .popoverShowsMonthlySalary, default: defaults.popoverShowsMonthlySalary)
+        popoverShowsYearlySalary = container.decodeLossy(Bool.self, forKey: .popoverShowsYearlySalary, default: defaults.popoverShowsYearlySalary)
+        popoverShowsWorkProgress = container.decodeLossy(Bool.self, forKey: .popoverShowsWorkProgress, default: defaults.popoverShowsWorkProgress)
+        popoverShowsQuote = container.decodeLossy(Bool.self, forKey: .popoverShowsQuote, default: defaults.popoverShowsQuote)
+        statusItemClickShowsPrivatePopover = container.decodeLossy(Bool.self, forKey: .statusItemClickShowsPrivatePopover, default: defaults.statusItemClickShowsPrivatePopover)
+        statusBarShowsAppIcon = container.decodeLossy(Bool.self, forKey: .statusBarShowsAppIcon, default: defaults.statusBarShowsAppIcon)
+        statusBarShowsCurrencySymbol = container.decodeLossy(Bool.self, forKey: .statusBarShowsCurrencySymbol, default: defaults.statusBarShowsCurrencySymbol)
+        statusBarSalaryAnimationStyle = container.decodeLossy(StatusBarSalaryAnimationStyle.self, forKey: .statusBarSalaryAnimationStyle, default: defaults.statusBarSalaryAnimationStyle)
+        moneyDecimalPlaces = container.decodeLossy(Int.self, forKey: .moneyDecimalPlaces, default: defaults.moneyDecimalPlaces)
+        shortcutActionSequence = container.decodeLossy([ShortcutAction].self, forKey: .shortcutActionSequence, default: defaults.shortcutActionSequence)
+        idleUsesLowFrequencyUpdates = container.decodeLossy(Bool.self, forKey: .idleUsesLowFrequencyUpdates, default: defaults.idleUsesLowFrequencyUpdates)
+        refreshIntervalSeconds = container.decodeLossy(Double.self, forKey: .refreshIntervalSeconds, default: defaults.refreshIntervalSeconds)
+        lunchBreakShowsColor = container.decodeLossy(Bool.self, forKey: .lunchBreakShowsColor, default: defaults.lunchBreakShowsColor)
+        dinnerBreakShowsColor = container.decodeLossy(Bool.self, forKey: .dinnerBreakShowsColor, default: defaults.dinnerBreakShowsColor)
+        workProgressShowsGrid = container.decodeLossy(Bool.self, forKey: .workProgressShowsGrid, default: defaults.workProgressShowsGrid)
+        workProgressShowsSegmentLabels = container.decodeLossy(Bool.self, forKey: .workProgressShowsSegmentLabels, default: defaults.workProgressShowsSegmentLabels)
+        workProgressGridMinutes = container.decodeLossy(Int.self, forKey: .workProgressGridMinutes, default: defaults.workProgressGridMinutes)
+        workProgressDecimalPlaces = container.decodeLossy(Int.self, forKey: .workProgressDecimalPlaces, default: defaults.workProgressDecimalPlaces)
+        breakTimeCountsAsPaidWork = container.decodeLossy(Bool.self, forKey: .breakTimeCountsAsPaidWork, default: defaults.breakTimeCountsAsPaidWork)
+        workProgressColorHex = container.decodeLossy(String.self, forKey: .workProgressColorHex, default: defaults.workProgressColorHex)
+        lunchBreakColorHex = container.decodeLossy(String.self, forKey: .lunchBreakColorHex, default: defaults.lunchBreakColorHex)
+        dinnerBreakColorHex = container.decodeLossy(String.self, forKey: .dinnerBreakColorHex, default: defaults.dinnerBreakColorHex)
+        holidayPastColorHex = container.decodeLossy(String.self, forKey: .holidayPastColorHex, default: defaults.holidayPastColorHex)
+        holidayFutureColorHex = container.decodeLossy(String.self, forKey: .holidayFutureColorHex, default: defaults.holidayFutureColorHex)
+        popoverSalaryColorHex = container.decodeLossy(String.self, forKey: .popoverSalaryColorHex, default: defaults.popoverSalaryColorHex)
+        statusBarSalaryColorHex = container.decodeLossyOptional(String.self, forKey: .statusBarSalaryColorHex)
+    }
 
     var shortcutDisplayString: String {
         let flags = shortcutModifierFlags
@@ -967,9 +1267,11 @@ extension NSEvent.ModifierFlags {
     }
 }
 
-/// 统一读写用户配置。当前策略是不做兼容迁移，解码失败时回到默认配置。
+/// 统一读写用户配置。
 final class SalaryConfigManager: ObservableObject {
     static let shared = SalaryConfigManager()
+    private static let failedConfigBackupKey = "salary_config_decode_failed_backup"
+    private static let failedConfigErrorKey = "salary_config_decode_failed_error"
 
     @Published var config: SalaryConfig {
         didSet {
@@ -981,16 +1283,26 @@ final class SalaryConfigManager: ObservableObject {
     private let configKey = "salary_config"
 
     init() {
-        if let data = defaults.data(forKey: configKey),
-           let decoded = try? JSONDecoder().decode(SalaryConfig.self, from: data) {
-            var normalized = decoded
-            normalized.normalize()
-            config = normalized
-            save()
+        if let data = defaults.data(forKey: configKey) {
+            do {
+                let decoded = try JSONDecoder().decode(SalaryConfig.self, from: data)
+                var normalized = decoded
+                normalized.normalize()
+                config = normalized
+                save()
+            } catch {
+                Self.backupFailedConfig(data, error: error, defaults: defaults)
+                config = SalaryConfig()
+            }
         } else {
             config = SalaryConfig()
             save()
         }
+    }
+
+    private static func backupFailedConfig(_ data: Data, error: Error, defaults: UserDefaults) {
+        defaults.set(data, forKey: failedConfigBackupKey)
+        defaults.set(String(describing: error), forKey: failedConfigErrorKey)
     }
 
     private func normalizeAndSave() {

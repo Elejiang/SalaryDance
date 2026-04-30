@@ -14,8 +14,9 @@
 
 策略：
 
-- 配置模型以现行结构为准，不维护历史字段迁移。
-- 配置不兼容时可以重置本地配置。
+- `SalaryConfig` 和嵌套配置模型需要兼容旧字段；新增字段必须在自定义解码里提供默认值。
+- 配置枚举的持久化值使用稳定 key，展示文案通过 `title` 提供；解码层兼容历史中文值。
+- `salary_config` 解码彻底失败时，先备份到 `salary_config_decode_failed_backup`，错误信息写入 `salary_config_decode_failed_error`，再使用内存默认配置启动，避免静默覆盖原始数据。
 
 ## 默认配置
 

@@ -26,7 +26,8 @@
 2. `normalize()` 修正非法值。
 3. 如果影响展示，设置页和预览同步更新。
 4. 如果影响计算，`SPEC.md` 或 `config-and-calculation.md` 同步更新。
-5. 配置不兼容时重置本地配置。
+5. 字段加入 `CodingKeys` 和自定义 `init(from:)`，用 `decodeLossy` / `decodeIfPresent` 兼容旧配置。
+6. 新增或改名枚举展示文案时，不修改持久化 raw value；历史文案别名放到枚举自定义解码里。
 
 ## 新增 Swift 文件清单
 

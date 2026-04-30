@@ -294,7 +294,7 @@ struct SettingsView: View {
                         .frame(width: 80, alignment: .leading)
                     Picker("", selection: $configManager.config.salaryType) {
                         ForEach(SalaryType.allCases, id: \.self) { type in
-                            Text(type.rawValue).tag(type)
+                            Text(type.title).tag(type)
                         }
                     }
                     .labelsHidden()
@@ -303,7 +303,7 @@ struct SettingsView: View {
                 }
 
                 HStack {
-                    Text(configManager.config.salaryType.rawValue)
+                    Text(configManager.config.salaryType.title)
                         .frame(width: 80, alignment: .leading)
                     TextField("0", text: $tempSalaryAmount)
                         .textFieldStyle(.roundedBorder)
@@ -364,7 +364,7 @@ struct SettingsView: View {
                     }
                 )) {
                     ForEach(MonthlySalaryCalculationMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                        Text(mode.title).tag(mode)
                     }
                 }
                 .pickerStyle(.menu)
@@ -546,7 +546,7 @@ struct SettingsView: View {
 
                 Picker("", selection: subsidyTypeBinding(for: subsidy.id)) {
                     ForEach(SalarySubsidyType.allCases) { type in
-                        Text(type.rawValue).tag(type)
+                        Text(type.title).tag(type)
                     }
                 }
                 .labelsHidden()
@@ -608,7 +608,7 @@ struct SettingsView: View {
 
                 Picker("", selection: monthlySubsidyApplicationBinding(for: subsidy.id)) {
                     ForEach(MonthlySubsidyApplicationMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                        Text(mode.title).tag(mode)
                     }
                 }
                 .labelsHidden()
@@ -627,7 +627,7 @@ struct SettingsView: View {
 
                     Picker("", selection: monthlySubsidyProrationBinding(for: subsidy.id)) {
                         ForEach(MonthlySubsidyProrationMode.allCases) { mode in
-                            Text(mode.rawValue).tag(mode)
+                            Text(mode.title).tag(mode)
                         }
                     }
                     .labelsHidden()
@@ -781,7 +781,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Picker("计薪规则", selection: $configManager.config.workDayRule) {
                     ForEach(WorkDayRule.allCases, id: \.self) { rule in
-                        Text(rule.rawValue).tag(rule)
+                        Text(rule.title).tag(rule)
                     }
                 }
                 .pickerStyle(.radioGroup)
@@ -1035,7 +1035,7 @@ struct SettingsView: View {
                             set: { setConfigValue(\.statusBarSalaryAnimationStyle, to: $0) }
                         )) {
                             ForEach(StatusBarSalaryAnimationStyle.allCases) { style in
-                                Text(style.rawValue).tag(style)
+                                Text(style.title).tag(style)
                             }
                         }
                         .pickerStyle(.segmented)
