@@ -236,15 +236,24 @@ enum MonthlySubsidyProrationMode: String, Codable, CaseIterable, Identifiable {
 
 /// 单条补贴配置。金额始终保存为非负数，按月补贴的固定平摊天数默认 21.75。
 struct SalarySubsidy: Codable, Equatable, Identifiable {
+    /// 按月补贴选择固定天数平摊时使用的默认分母。
     static let defaultFixedProrationDays = 21.75
 
+    /// 补贴记录的稳定标识，用于列表编辑和持久化匹配。
     var id: UUID = UUID()
+    /// 是否参与薪资换算；关闭后保留配置但完全不计入收入。
     var enabled: Bool = true
+    /// 用户可编辑的补贴名称，空值展示为默认名称。
     var name: String = "补贴名"
+    /// 补贴发放口径，决定按日计入还是按月计入。
     var type: SalarySubsidyType = .daily
+    /// 补贴金额，规范化时会修正为非负数。
     var amount: Double = 0
+    /// 按月补贴是否平摊到每天并参与实时收入。
     var monthlyApplicationMode: MonthlySubsidyApplicationMode = .spreadToDailySalary
+    /// 按月补贴平摊到每天时使用的分母来源。
     var monthlyProrationMode: MonthlySubsidyProrationMode = .fixedDays
+    /// 按月补贴选择固定天数平摊时的具体天数。
     var fixedProrationDays: Double = Self.defaultFixedProrationDays
 
     private enum CodingKeys: String, CodingKey {
@@ -367,9 +376,13 @@ enum ShortcutAction: String, Codable, CaseIterable, Identifiable {
 
 /// 只保存时分的时间段，支持结束时间小于开始时间来表达跨夜。
 struct TimeRange: Codable, Equatable {
+    /// 开始小时，使用 0...23 的 24 小时制。
     var startHour: Int
+    /// 开始分钟，使用 0...59。
     var startMinute: Int
+    /// 结束小时，使用 0...23 的 24 小时制。
     var endHour: Int
+    /// 结束分钟，使用 0...59。
     var endMinute: Int
 
     var startMinutes: Int { startHour * 60 + startMinute }
@@ -411,16 +424,26 @@ struct TimeRange: Codable, Equatable {
 
 /// 单条特殊工作日规则。数组顺序就是优先级，第一条启用且命中的规则生效。
 struct SpecialWorkdayRule: Codable, Equatable, Identifiable {
+    /// 隔周循环规则允许的周期间隔范围。
     static let intervalWeeksRange = 1...12
 
+    /// 规则稳定标识，用于列表编辑和持久化匹配。
     var id: UUID = UUID()
+    /// 是否启用当前特殊工作日规则。
     var enabled: Bool = true
+    /// 用户可编辑的规则名称，空值展示为默认名称。
     var name: String = "特殊工作日"
+    /// 规则命中方式，例如休息日前一天、固定星期、隔周循环或指定日期。
     var kind: SpecialWorkdayRuleKind = .dayBeforeRestDay
+    /// 规则适用星期，取值 1...7 表示周一到周日。
     var weekdays: Set<Int> = [5]
+    /// 隔周循环规则的间隔周数。
     var intervalWeeks: Int = 2
+    /// 隔周循环规则的起算日期，按该日期所在周计算周期。
     var anchorDate: Date = Calendar.current.startOfDay(for: Date())
+    /// 指定日期规则命中的自然日。
     var exactDate: Date = Calendar.current.startOfDay(for: Date())
+    /// 规则命中当天覆盖使用的上下班时间。
     var workTime: TimeRange = .defaultSpecialWorkdayTime
 
     private enum CodingKeys: String, CodingKey {
@@ -565,82 +588,156 @@ private extension KeyedDecodingContainer {
 
 /// App 的完整配置模型。新增字段必须提供兼容解码默认值，避免旧版本配置整体失效。
 struct SalaryConfig: Codable, Equatable {
+    /// 用户可配置刷新间隔的允许范围，单位秒。
     static let refreshIntervalRange: ClosedRange<Double> = 0.5...3600
+    /// 工作进度时间轴网格支持的间隔选项，单位分钟。
     static let workProgressGridIntervalOptions = [15, 30, 60, 120]
+    /// 工作进度百分比展示支持的小数位范围。
     static let workProgressDecimalPlacesRange = 0...3
+    /// 固定月薪折算天数的默认值。
     static let averageMonthlyWorkDays = 21.75
+    /// 固定月薪折算天数的允许范围。
     static let monthlyWorkdaysRange: ClosedRange<Double> = 1...31
+    /// 年薪折算为日薪时使用的默认工作日数量。
     static let yearlyWorkDays = 250.0
+    /// 主快捷键和摸鱼快捷键默认使用的修饰键。
     static let defaultShortcutModifiers = Int(NSEvent.ModifierFlags([.option, .command]).rawValue)
+    /// 摸鱼快捷键默认主键，当前对应 X。
     static let defaultOffTaskShortcutKeyCode: UInt16 = 7
 
+    /// 用户输入薪资的口径：月薪、日薪或年薪。
     var salaryType: SalaryType = .monthly
+    /// 用户输入的薪资金额，按 `salaryType` 解释。
     var salaryAmount: Double = 0
+    /// 当前计薪周期的归属范围，用于本月/本周期统计。
     var salaryCycleMode: SalaryCycleMode = .naturalMonth
+    /// 月薪和日薪互相折算时使用的分母来源。
     var monthlySalaryCalculationMode: MonthlySalaryCalculationMode = .fixedAverage
+    /// 固定月薪折算模式下使用的月工作日数量。
     var fixedMonthlyWorkdays: Double = Self.averageMonthlyWorkDays
+    /// 固定计薪周期的每月起始日，短月按当月最后一天兜底。
     var monthlySalaryCycleStartDay: Int = 1
+    /// 用户配置的全部补贴，关闭的补贴保留但不参与计算。
     var subsidies: [SalarySubsidy] = []
+    /// 常规工作日的上下班时间。
     var workTime: TimeRange = .defaultWorkTime
+    /// 是否启用午休时间段。
     var lunchBreakEnabled: Bool = true
+    /// 午休开始和结束时间。
     var lunchBreak: TimeRange = .defaultLunchBreak
+    /// 是否启用晚饭时间段。
     var dinnerBreakEnabled: Bool = true
+    /// 晚饭开始和结束时间。
     var dinnerBreak: TimeRange = .defaultDinnerBreak
+    /// 哪些自然日参与计薪。
     var workDayRule: WorkDayRule = .weekdaysOnly
+    /// 自定义计薪日集合，取值 1...7 表示周一到周日。
     var customWorkDays: Set<Int> = [1, 3, 4, 5]
+    /// 特殊工作日时间覆盖规则，数组顺序表示优先级。
     var specialWorkdayRules: [SpecialWorkdayRule] = []
-    var launchAtLogin: Bool = false
+    /// 是否随用户登录自动启动 App。
+    var launchAtLogin: Bool = true
+    /// 主快捷键修饰键，存储 `NSEvent.ModifierFlags` 的 raw value。
     var shortcutModifiers: Int = Self.defaultShortcutModifiers
+    /// 主快捷键主键 keyCode。
     var shortcutKeyCode: UInt16 = ShortcutKey.defaultKeyCode
+    /// 是否启用主快捷键动作序列。
     var shortcutEnabled: Bool = true
+    /// 状态栏是否显示实时薪资金额。
     var statusBarShowsEarnings: Bool = true
+    /// 弹窗是否显示当前已赚金额。
     var popoverShowsCurrentEarnings: Bool = true
+    /// 弹窗是否显示今天剩余可赚金额。
     var popoverShowsRemainingEarnings: Bool = true
+    /// 弹窗是否显示当前工作状态和下班倒计时。
     var popoverShowsWorkStatus: Bool = true
-    var popoverShowsSecondSalary: Bool = true
-    var popoverShowsMinuteSalary: Bool = true
+    /// 弹窗是否显示秒薪。
+    var popoverShowsSecondSalary: Bool = false
+    /// 弹窗是否显示分薪。
+    var popoverShowsMinuteSalary: Bool = false
+    /// 弹窗是否显示时薪。
     var popoverShowsHourlySalary: Bool = true
-    var popoverShowsDailySalary: Bool = false
-    var popoverShowsMonthlySalary: Bool = false
+    /// 弹窗是否显示日薪。
+    var popoverShowsDailySalary: Bool = true
+    /// 弹窗是否显示月薪。
+    var popoverShowsMonthlySalary: Bool = true
+    /// 弹窗是否显示年薪。
     var popoverShowsYearlySalary: Bool = false
+    /// 弹窗是否显示工作进度条。
     var popoverShowsWorkProgress: Bool = true
-    var popoverShowsQuote: Bool = true
+    /// 弹窗是否显示打工语录。
+    var popoverShowsQuote: Bool = false
+    /// 弹窗是否显示摸鱼状态卡片。
     var popoverShowsOffTaskStatus: Bool = true
-    var popoverShowsTodayOffTaskSalary: Bool = false
-    var popoverShowsWeekOffTaskSalary: Bool = false
+    /// 弹窗摸鱼卡片是否显示本日摸鱼薪资。
+    var popoverShowsTodayOffTaskSalary: Bool = true
+    /// 弹窗摸鱼卡片是否显示本周摸鱼薪资。
+    var popoverShowsWeekOffTaskSalary: Bool = true
+    /// 弹窗摸鱼卡片是否显示当前计薪周期摸鱼薪资。
     var popoverShowsSalaryCycleOffTaskSalary: Bool = false
+    /// 弹窗摸鱼卡片是否显示历史累计摸鱼薪资。
     var popoverShowsHistoricalOffTaskSalary: Bool = false
-    var popoverShowsTodayOffTaskDuration: Bool = false
-    var popoverShowsWeekOffTaskDuration: Bool = false
+    /// 弹窗摸鱼卡片是否显示本日摸鱼时长。
+    var popoverShowsTodayOffTaskDuration: Bool = true
+    /// 弹窗摸鱼卡片是否显示本周摸鱼时长。
+    var popoverShowsWeekOffTaskDuration: Bool = true
+    /// 弹窗摸鱼卡片是否显示当前计薪周期摸鱼时长。
     var popoverShowsSalaryCycleOffTaskDuration: Bool = false
+    /// 弹窗摸鱼卡片是否显示历史累计摸鱼时长。
     var popoverShowsHistoricalOffTaskDuration: Bool = false
-    var statusItemClickShowsPrivatePopover: Bool = true
+    /// 点击状态栏入口时是否默认以脱敏模式打开弹窗。
+    var statusItemClickShowsPrivatePopover: Bool = false
+    /// 状态栏是否显示 App 图标。
     var statusBarShowsAppIcon: Bool = false
-    var statusBarShowsCurrencySymbol: Bool = true
+    /// 状态栏金额是否显示货币符号。
+    var statusBarShowsCurrencySymbol: Bool = false
+    /// 状态栏是否显示摸鱼状态图标。
     var statusBarShowsOffTaskStatusIcon: Bool = true
+    /// 摸鱼状态图标是否仅在摸鱼中显示。
     var statusBarShowsOffTaskStatusIconOnlyWhenActive: Bool = true
+    /// 状态栏实时金额变化时使用的动画样式。
     var statusBarSalaryAnimationStyle: StatusBarSalaryAnimationStyle = .rolling
+    /// 金额展示的小数位，规范化后限制在 0...3。
     var moneyDecimalPlaces: Int = 2
+    /// 主快捷键每次按下后依次执行的动作序列。
     var shortcutActionSequence: [ShortcutAction] = ShortcutAction.defaultSequence
+    /// 是否启用摸鱼状态切换快捷键。
     var offTaskShortcutEnabled: Bool = true
+    /// 摸鱼快捷键修饰键，存储 `NSEvent.ModifierFlags` 的 raw value。
     var offTaskShortcutModifiers: Int = Self.defaultShortcutModifiers
+    /// 摸鱼快捷键主键 keyCode。
     var offTaskShortcutKeyCode: UInt16 = Self.defaultOffTaskShortcutKeyCode
+    /// 没有实时展示需求时是否降低刷新频率。
     var idleUsesLowFrequencyUpdates: Bool = true
-    var refreshIntervalSeconds: Double = 1
+    /// 实时薪资和弹窗刷新间隔，单位秒。
+    var refreshIntervalSeconds: Double = 5
+    /// 工作进度条是否用午休颜色标出午休段。
     var lunchBreakShowsColor: Bool = false
+    /// 工作进度条是否用晚饭颜色标出晚饭段。
     var dinnerBreakShowsColor: Bool = false
-    var workProgressShowsGrid: Bool = true
-    var workProgressShowsSegmentLabels: Bool = true
+    /// 工作进度条是否显示时间网格。
+    var workProgressShowsGrid: Bool = false
+    /// 工作进度条是否显示分段时间标签。
+    var workProgressShowsSegmentLabels: Bool = false
+    /// 工作进度条网格间隔，单位分钟。
     var workProgressGridMinutes: Int = 60
-    /// 工作进度百分比的小数位，默认 0 位以延续原来的整数百分比展示。
-    var workProgressDecimalPlaces: Int = 0
+    /// 工作进度百分比的小数位。
+    var workProgressDecimalPlaces: Int = 2
+    /// 休息时间是否计入有效计薪时长。
     var breakTimeCountsAsPaidWork: Bool = false
+    /// 工作进度主色，保存为十六进制颜色。
     var workProgressColorHex: String = SalaryColor.defaultWorkProgressHex
+    /// 午休段颜色，保存为十六进制颜色。
     var lunchBreakColorHex: String = SalaryColor.defaultLunchBreakHex
+    /// 晚饭段颜色，保存为十六进制颜色。
     var dinnerBreakColorHex: String = SalaryColor.defaultDinnerBreakHex
+    /// 已过去节假日的日历标记颜色。
     var holidayPastColorHex: String = SalaryColor.defaultHolidayPastHex
+    /// 未来节假日的日历标记颜色。
     var holidayFutureColorHex: String = SalaryColor.defaultHolidayFutureHex
+    /// 弹窗薪资数字主色，保存为十六进制颜色。
     var popoverSalaryColorHex: String = SalaryColor.defaultPopoverSalaryHex
+    /// 状态栏薪资颜色；为空时使用状态栏默认白色。
     var statusBarSalaryColorHex: String? = nil
 
     private enum CodingKeys: String, CodingKey {
@@ -1714,7 +1811,7 @@ final class SalaryConfigManager: ObservableObject {
     }
 }
 
-/// 数据分区包含会影响薪资计算和历史归属的业务数据；薪资补贴归在这里，而不是偏好配置。
+/// 数据分区包含会影响薪资计算和历史归属的业务数据；字段语义与 `SalaryConfig` 同名字段一致。
 struct SalaryDataSettings: Codable, Equatable {
     var salaryType: SalaryType
     var salaryAmount: Double
@@ -1775,7 +1872,7 @@ struct SalaryDataSettings: Codable, Equatable {
     }
 }
 
-/// 配置分区只包含偏好行为和视觉设置，不包含薪资、补贴、工作时间或摸鱼历史。
+/// 配置分区只包含偏好行为和视觉设置；字段语义与 `SalaryConfig` 同名字段一致。
 struct SalaryPreferenceSettings: Codable, Equatable {
     var launchAtLogin: Bool
     var shortcutModifiers: Int
@@ -1943,19 +2040,29 @@ struct SalaryPreferenceSettings: Codable, Equatable {
 
 /// 单独配置导入导出的文件格式。`preferences` 只包含偏好配置，和数据文件保持字段零交集。
 struct SalaryConfigExportDocument: Codable {
+    /// 文件类型标识，用于导入时区分配置文件和数据文件。
     var documentType = "salarydance.config"
+    /// 配置文件结构版本，用于后续兼容演进。
     var schemaVersion = 1
+    /// 导出时间，便于用户识别文件新旧。
     var exportedAt = Date()
+    /// 展示、快捷键、颜色、刷新和应用行为等偏好配置。
     var preferences: SalaryPreferenceSettings
+    /// 设置窗口侧边栏宽度，独立于 `SalaryConfig` 存储。
     var settingsSidebarWidth: Double?
 }
 
 /// 数据导入导出的文件格式。包含薪资数据、补贴、计薪规则、工作时间和用户产生的全部摸鱼记录。
 struct SalaryDataExportDocument: Codable {
+    /// 文件类型标识，用于导入时区分数据文件和配置文件。
     var documentType = "salarydance.data"
+    /// 数据文件结构版本，用于后续兼容演进。
     var schemaVersion = 1
+    /// 导出时间，便于用户识别文件新旧。
     var exportedAt = Date()
+    /// 薪资、补贴、计薪规则和工作时间等业务数据。
     var salaryData: SalaryDataSettings
+    /// 用户产生的全部摸鱼原始记录。
     var offTaskSessions: [OffTaskSession]
 }
 

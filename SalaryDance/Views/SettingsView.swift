@@ -423,8 +423,10 @@ struct SettingsView: View {
     @FocusState private var isRefreshIntervalFocused: Bool
     @FocusState private var isFixedMonthlyWorkdaysFocused: Bool
     @FocusState private var isSalaryCycleStartDayFocused: Bool
-    @AppStorage("settings_sidebar_width") private var storedSidebarWidth: Double = 218
-    @State private var sidebarWidth: Double = 218
+    /// 设置窗口左侧分类栏宽度，独立于薪资配置持久化。
+    @AppStorage("settings_sidebar_width") private var storedSidebarWidth: Double = 168
+    /// 拖动过程中的侧边栏宽度，拖动结束后再写入 `storedSidebarWidth`。
+    @State private var sidebarWidth: Double = 168
     @State private var expandedOffTaskHistoryYears: Set<String> = []
     @State private var expandedOffTaskHistoryMonths: Set<String> = []
     @State private var expandedOffTaskHistoryDays: Set<String> = []

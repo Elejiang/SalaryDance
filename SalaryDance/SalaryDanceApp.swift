@@ -16,6 +16,8 @@ struct SalaryDanceApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         StatusBarController.shared.start()
+        // 启动时同步登录项，覆盖首次安装默认值和外部导入配置后的系统状态差异。
+        LaunchAtLoginManager.setEnabled(SalaryConfigManager.shared.config.launchAtLogin)
         GlobalShortcutMonitor.shared.onToggle = {
             StatusBarController.shared.handleShortcutPress()
         }
