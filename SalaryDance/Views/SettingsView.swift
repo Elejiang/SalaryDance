@@ -774,8 +774,8 @@ struct SettingsView: View {
             Divider()
 
             HStack {
-                Text("计薪方式")
-                    .frame(width: 80, alignment: .leading)
+                Text("日薪与月薪折算方式")
+                    .frame(width: 140, alignment: .leading)
                 Picker("", selection: Binding(
                     get: { configManager.config.resolvedMonthlySalaryCalculationMode },
                     set: { newValue in
@@ -792,7 +792,8 @@ struct SettingsView: View {
                 Spacer()
             }
 
-            if configManager.config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays {
+            if configManager.config.resolvedMonthlySalaryCalculationMode == .salaryCycleWorkdays,
+               configManager.config.salaryType != .daily {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "info.circle")
                         .foregroundColor(.secondary)
