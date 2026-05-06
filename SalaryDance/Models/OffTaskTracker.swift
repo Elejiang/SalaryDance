@@ -88,6 +88,7 @@ final class OffTaskTracker: ObservableObject {
 
     @Published private(set) var sessions: [OffTaskSession] = [] {
         didSet {
+            summaryMapCache = nil
             save()
         }
     }
@@ -205,6 +206,40 @@ final class OffTaskTracker: ObservableObject {
         updated.remove(at: index)
         sessions = updated
         return true
+    }
+
+    /// 导入替换的是用户原始记录，先在内存中完整校验并规范排序，避免落入多个进行中记录等无法稳定展示的状态。
+    func replaceSessionsForImport(_ imported: [OffTaskSession]) throws {
+        sessions = try Self.normalizedImportedSessions(imported)
+    }
+
+    static func normalizedImportedSessions(_ imported: [OffTaskSession]) throws -> [OffTaskSession] {
+        var usedIDs = Set<UUID>()
+        var activeSessionCount = 0
+        var normalized: [OffTaskSession] = []
+
+        for session in imported {
+            if let end = session.end, end <= session.start {
+                throw SalaryDataTransferError.invalidOffTaskData("存在结束时间不晚于开始时间的摸鱼记录")
+            }
+
+            if session.end == nil {
+                activeSessionCount += 1
+            }
+
+            var uniqueSession = session
+            if usedIDs.contains(uniqueSession.id) {
+                uniqueSession.id = UUID()
+            }
+            usedIDs.insert(uniqueSession.id)
+            normalized.append(uniqueSession)
+        }
+
+        guard activeSessionCount <= 1 else {
+            throw SalaryDataTransferError.invalidOffTaskData("最多只能有一条进行中的摸鱼记录")
+        }
+
+        return normalized.sorted { $0.start < $1.start }
     }
 
     /// 定时刷新时收束跨过下班时间的打开区间；已关闭区间不再改写。

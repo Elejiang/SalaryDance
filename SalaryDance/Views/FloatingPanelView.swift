@@ -354,7 +354,8 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
               let button = statusItem.button else { return }
         let config = SalaryConfigManager.shared.config
         let showsEarnings = config.displaysEarningsInStatusBar
-        let showsOffTaskIcon = config.statusBarDisplaysOffTaskStatusIcon
+        let isOffTaskActive = offTaskTracker.isActive
+        let showsOffTaskIcon = config.statusBarDisplaysOffTaskStatusIcon(isOffTaskActive: isOffTaskActive)
         let usesHostedContent = showsEarnings || showsOffTaskIcon
         let showsIcon = !showsEarnings || config.statusBarDisplaysAppIcon
         let tooltip = statusItemTooltip(config: config, showsOffTaskIcon: showsOffTaskIcon)
@@ -418,7 +419,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             salaryColorHex: config.resolvedStatusBarSalaryColorHex,
             animationStyle: animationStyle,
             showsOffTaskIcon: showsOffTaskIcon,
-            offTaskIsActive: offTaskTracker.isActive
+            offTaskIsActive: isOffTaskActive
         )
         statusItemModel.update(state)
 

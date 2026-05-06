@@ -618,6 +618,7 @@ struct SalaryConfig: Codable, Equatable {
     var statusBarShowsAppIcon: Bool = false
     var statusBarShowsCurrencySymbol: Bool = true
     var statusBarShowsOffTaskStatusIcon: Bool = true
+    var statusBarShowsOffTaskStatusIconOnlyWhenActive: Bool = true
     var statusBarSalaryAnimationStyle: StatusBarSalaryAnimationStyle = .rolling
     var moneyDecimalPlaces: Int = 2
     var shortcutActionSequence: [ShortcutAction] = ShortcutAction.defaultSequence
@@ -687,6 +688,7 @@ struct SalaryConfig: Codable, Equatable {
         case statusBarShowsAppIcon
         case statusBarShowsCurrencySymbol
         case statusBarShowsOffTaskStatusIcon
+        case statusBarShowsOffTaskStatusIconOnlyWhenActive
         case statusBarSalaryAnimationStyle
         case moneyDecimalPlaces
         case shortcutActionSequence
@@ -762,6 +764,7 @@ struct SalaryConfig: Codable, Equatable {
         statusBarShowsAppIcon = container.decodeLossy(Bool.self, forKey: .statusBarShowsAppIcon, default: defaults.statusBarShowsAppIcon)
         statusBarShowsCurrencySymbol = container.decodeLossy(Bool.self, forKey: .statusBarShowsCurrencySymbol, default: defaults.statusBarShowsCurrencySymbol)
         statusBarShowsOffTaskStatusIcon = container.decodeLossy(Bool.self, forKey: .statusBarShowsOffTaskStatusIcon, default: defaults.statusBarShowsOffTaskStatusIcon)
+        statusBarShowsOffTaskStatusIconOnlyWhenActive = container.decodeLossy(Bool.self, forKey: .statusBarShowsOffTaskStatusIconOnlyWhenActive, default: defaults.statusBarShowsOffTaskStatusIconOnlyWhenActive)
         statusBarSalaryAnimationStyle = container.decodeLossy(StatusBarSalaryAnimationStyle.self, forKey: .statusBarSalaryAnimationStyle, default: defaults.statusBarSalaryAnimationStyle)
         moneyDecimalPlaces = container.decodeLossy(Int.self, forKey: .moneyDecimalPlaces, default: defaults.moneyDecimalPlaces)
         shortcutActionSequence = container.decodeLossy([ShortcutAction].self, forKey: .shortcutActionSequence, default: defaults.shortcutActionSequence)
@@ -828,6 +831,16 @@ struct SalaryConfig: Codable, Equatable {
 
     var statusBarDisplaysOffTaskStatusIcon: Bool {
         statusBarShowsOffTaskStatusIcon
+    }
+
+    var statusBarDisplaysOffTaskStatusIconOnlyWhenActive: Bool {
+        statusBarShowsOffTaskStatusIconOnlyWhenActive
+    }
+
+    /// 摸鱼状态栏图标同时受总开关和显示策略约束；仅摸鱼中显示时不占用未开启状态栏宽度。
+    func statusBarDisplaysOffTaskStatusIcon(isOffTaskActive: Bool) -> Bool {
+        statusBarShowsOffTaskStatusIcon
+            && (!statusBarShowsOffTaskStatusIconOnlyWhenActive || isOffTaskActive)
     }
 
     var usesLowFrequencyUpdatesWhenIdle: Bool {
@@ -1684,9 +1697,336 @@ final class SalaryConfigManager: ObservableObject {
         save()
     }
 
+    /// 数据导入只覆盖薪资、补贴、计薪规则和工作时间，避免覆盖展示和快捷键等偏好配置。
+    func replaceSalaryDataForImport(_ imported: SalaryDataSettings) {
+        config = imported.applying(to: config)
+    }
+
+    /// 配置导入只覆盖展示、快捷键、刷新、颜色和应用行为，和数据导入保持字段零交集。
+    func replacePreferenceConfigForImport(_ imported: SalaryPreferenceSettings) {
+        config = imported.applying(to: config)
+    }
+
     func save() {
         if let data = try? JSONEncoder().encode(config) {
             defaults.set(data, forKey: configKey)
+        }
+    }
+}
+
+/// 数据分区包含会影响薪资计算和历史归属的业务数据；薪资补贴归在这里，而不是偏好配置。
+struct SalaryDataSettings: Codable, Equatable {
+    var salaryType: SalaryType
+    var salaryAmount: Double
+    var salaryCycleMode: SalaryCycleMode
+    var monthlySalaryCalculationMode: MonthlySalaryCalculationMode
+    var fixedMonthlyWorkdays: Double
+    var monthlySalaryCycleStartDay: Int
+    var subsidies: [SalarySubsidy]
+    var workTime: TimeRange
+    var lunchBreakEnabled: Bool
+    var lunchBreak: TimeRange
+    var dinnerBreakEnabled: Bool
+    var dinnerBreak: TimeRange
+    var workDayRule: WorkDayRule
+    var customWorkDays: Set<Int>
+    var specialWorkdayRules: [SpecialWorkdayRule]
+    var breakTimeCountsAsPaidWork: Bool
+
+    init(config: SalaryConfig) {
+        salaryType = config.salaryType
+        salaryAmount = config.salaryAmount
+        salaryCycleMode = config.salaryCycleMode
+        monthlySalaryCalculationMode = config.monthlySalaryCalculationMode
+        fixedMonthlyWorkdays = config.fixedMonthlyWorkdays
+        monthlySalaryCycleStartDay = config.monthlySalaryCycleStartDay
+        subsidies = config.subsidies
+        workTime = config.workTime
+        lunchBreakEnabled = config.lunchBreakEnabled
+        lunchBreak = config.lunchBreak
+        dinnerBreakEnabled = config.dinnerBreakEnabled
+        dinnerBreak = config.dinnerBreak
+        workDayRule = config.workDayRule
+        customWorkDays = config.customWorkDays
+        specialWorkdayRules = config.specialWorkdayRules
+        breakTimeCountsAsPaidWork = config.breakTimeCountsAsPaidWork
+    }
+
+    func applying(to config: SalaryConfig) -> SalaryConfig {
+        var updated = config
+        updated.salaryType = salaryType
+        updated.salaryAmount = salaryAmount
+        updated.salaryCycleMode = salaryCycleMode
+        updated.monthlySalaryCalculationMode = monthlySalaryCalculationMode
+        updated.fixedMonthlyWorkdays = fixedMonthlyWorkdays
+        updated.monthlySalaryCycleStartDay = monthlySalaryCycleStartDay
+        updated.subsidies = subsidies
+        updated.workTime = workTime
+        updated.lunchBreakEnabled = lunchBreakEnabled
+        updated.lunchBreak = lunchBreak
+        updated.dinnerBreakEnabled = dinnerBreakEnabled
+        updated.dinnerBreak = dinnerBreak
+        updated.workDayRule = workDayRule
+        updated.customWorkDays = customWorkDays
+        updated.specialWorkdayRules = specialWorkdayRules
+        updated.breakTimeCountsAsPaidWork = breakTimeCountsAsPaidWork
+        updated.normalize()
+        return updated
+    }
+}
+
+/// 配置分区只包含偏好行为和视觉设置，不包含薪资、补贴、工作时间或摸鱼历史。
+struct SalaryPreferenceSettings: Codable, Equatable {
+    var launchAtLogin: Bool
+    var shortcutModifiers: Int
+    var shortcutKeyCode: UInt16
+    var shortcutEnabled: Bool
+    var statusBarShowsEarnings: Bool
+    var popoverShowsCurrentEarnings: Bool
+    var popoverShowsRemainingEarnings: Bool
+    var popoverShowsWorkStatus: Bool
+    var popoverShowsSecondSalary: Bool
+    var popoverShowsMinuteSalary: Bool
+    var popoverShowsHourlySalary: Bool
+    var popoverShowsDailySalary: Bool
+    var popoverShowsMonthlySalary: Bool
+    var popoverShowsYearlySalary: Bool
+    var popoverShowsWorkProgress: Bool
+    var popoverShowsQuote: Bool
+    var popoverShowsOffTaskStatus: Bool
+    var popoverShowsTodayOffTaskSalary: Bool
+    var popoverShowsWeekOffTaskSalary: Bool
+    var popoverShowsSalaryCycleOffTaskSalary: Bool
+    var popoverShowsHistoricalOffTaskSalary: Bool
+    var popoverShowsTodayOffTaskDuration: Bool
+    var popoverShowsWeekOffTaskDuration: Bool
+    var popoverShowsSalaryCycleOffTaskDuration: Bool
+    var popoverShowsHistoricalOffTaskDuration: Bool
+    var statusItemClickShowsPrivatePopover: Bool
+    var statusBarShowsAppIcon: Bool
+    var statusBarShowsCurrencySymbol: Bool
+    var statusBarShowsOffTaskStatusIcon: Bool
+    var statusBarShowsOffTaskStatusIconOnlyWhenActive: Bool
+    var statusBarSalaryAnimationStyle: StatusBarSalaryAnimationStyle
+    var moneyDecimalPlaces: Int
+    var shortcutActionSequence: [ShortcutAction]
+    var offTaskShortcutEnabled: Bool
+    var offTaskShortcutModifiers: Int
+    var offTaskShortcutKeyCode: UInt16
+    var idleUsesLowFrequencyUpdates: Bool
+    var refreshIntervalSeconds: Double
+    var lunchBreakShowsColor: Bool
+    var dinnerBreakShowsColor: Bool
+    var workProgressShowsGrid: Bool
+    var workProgressShowsSegmentLabels: Bool
+    var workProgressGridMinutes: Int
+    var workProgressDecimalPlaces: Int
+    var workProgressColorHex: String
+    var lunchBreakColorHex: String
+    var dinnerBreakColorHex: String
+    var holidayPastColorHex: String
+    var holidayFutureColorHex: String
+    var popoverSalaryColorHex: String
+    var statusBarSalaryColorHex: String?
+
+    init(config: SalaryConfig) {
+        launchAtLogin = config.launchAtLogin
+        shortcutModifiers = config.shortcutModifiers
+        shortcutKeyCode = config.shortcutKeyCode
+        shortcutEnabled = config.shortcutEnabled
+        statusBarShowsEarnings = config.statusBarShowsEarnings
+        popoverShowsCurrentEarnings = config.popoverShowsCurrentEarnings
+        popoverShowsRemainingEarnings = config.popoverShowsRemainingEarnings
+        popoverShowsWorkStatus = config.popoverShowsWorkStatus
+        popoverShowsSecondSalary = config.popoverShowsSecondSalary
+        popoverShowsMinuteSalary = config.popoverShowsMinuteSalary
+        popoverShowsHourlySalary = config.popoverShowsHourlySalary
+        popoverShowsDailySalary = config.popoverShowsDailySalary
+        popoverShowsMonthlySalary = config.popoverShowsMonthlySalary
+        popoverShowsYearlySalary = config.popoverShowsYearlySalary
+        popoverShowsWorkProgress = config.popoverShowsWorkProgress
+        popoverShowsQuote = config.popoverShowsQuote
+        popoverShowsOffTaskStatus = config.popoverShowsOffTaskStatus
+        popoverShowsTodayOffTaskSalary = config.popoverShowsTodayOffTaskSalary
+        popoverShowsWeekOffTaskSalary = config.popoverShowsWeekOffTaskSalary
+        popoverShowsSalaryCycleOffTaskSalary = config.popoverShowsSalaryCycleOffTaskSalary
+        popoverShowsHistoricalOffTaskSalary = config.popoverShowsHistoricalOffTaskSalary
+        popoverShowsTodayOffTaskDuration = config.popoverShowsTodayOffTaskDuration
+        popoverShowsWeekOffTaskDuration = config.popoverShowsWeekOffTaskDuration
+        popoverShowsSalaryCycleOffTaskDuration = config.popoverShowsSalaryCycleOffTaskDuration
+        popoverShowsHistoricalOffTaskDuration = config.popoverShowsHistoricalOffTaskDuration
+        statusItemClickShowsPrivatePopover = config.statusItemClickShowsPrivatePopover
+        statusBarShowsAppIcon = config.statusBarShowsAppIcon
+        statusBarShowsCurrencySymbol = config.statusBarShowsCurrencySymbol
+        statusBarShowsOffTaskStatusIcon = config.statusBarShowsOffTaskStatusIcon
+        statusBarShowsOffTaskStatusIconOnlyWhenActive = config.statusBarShowsOffTaskStatusIconOnlyWhenActive
+        statusBarSalaryAnimationStyle = config.statusBarSalaryAnimationStyle
+        moneyDecimalPlaces = config.moneyDecimalPlaces
+        shortcutActionSequence = config.shortcutActionSequence
+        offTaskShortcutEnabled = config.offTaskShortcutEnabled
+        offTaskShortcutModifiers = config.offTaskShortcutModifiers
+        offTaskShortcutKeyCode = config.offTaskShortcutKeyCode
+        idleUsesLowFrequencyUpdates = config.idleUsesLowFrequencyUpdates
+        refreshIntervalSeconds = config.refreshIntervalSeconds
+        lunchBreakShowsColor = config.lunchBreakShowsColor
+        dinnerBreakShowsColor = config.dinnerBreakShowsColor
+        workProgressShowsGrid = config.workProgressShowsGrid
+        workProgressShowsSegmentLabels = config.workProgressShowsSegmentLabels
+        workProgressGridMinutes = config.workProgressGridMinutes
+        workProgressDecimalPlaces = config.workProgressDecimalPlaces
+        workProgressColorHex = config.workProgressColorHex
+        lunchBreakColorHex = config.lunchBreakColorHex
+        dinnerBreakColorHex = config.dinnerBreakColorHex
+        holidayPastColorHex = config.holidayPastColorHex
+        holidayFutureColorHex = config.holidayFutureColorHex
+        popoverSalaryColorHex = config.popoverSalaryColorHex
+        statusBarSalaryColorHex = config.statusBarSalaryColorHex
+    }
+
+    func applying(to config: SalaryConfig) -> SalaryConfig {
+        var updated = config
+        updated.launchAtLogin = launchAtLogin
+        updated.shortcutModifiers = shortcutModifiers
+        updated.shortcutKeyCode = shortcutKeyCode
+        updated.shortcutEnabled = shortcutEnabled
+        updated.statusBarShowsEarnings = statusBarShowsEarnings
+        updated.popoverShowsCurrentEarnings = popoverShowsCurrentEarnings
+        updated.popoverShowsRemainingEarnings = popoverShowsRemainingEarnings
+        updated.popoverShowsWorkStatus = popoverShowsWorkStatus
+        updated.popoverShowsSecondSalary = popoverShowsSecondSalary
+        updated.popoverShowsMinuteSalary = popoverShowsMinuteSalary
+        updated.popoverShowsHourlySalary = popoverShowsHourlySalary
+        updated.popoverShowsDailySalary = popoverShowsDailySalary
+        updated.popoverShowsMonthlySalary = popoverShowsMonthlySalary
+        updated.popoverShowsYearlySalary = popoverShowsYearlySalary
+        updated.popoverShowsWorkProgress = popoverShowsWorkProgress
+        updated.popoverShowsQuote = popoverShowsQuote
+        updated.popoverShowsOffTaskStatus = popoverShowsOffTaskStatus
+        updated.popoverShowsTodayOffTaskSalary = popoverShowsTodayOffTaskSalary
+        updated.popoverShowsWeekOffTaskSalary = popoverShowsWeekOffTaskSalary
+        updated.popoverShowsSalaryCycleOffTaskSalary = popoverShowsSalaryCycleOffTaskSalary
+        updated.popoverShowsHistoricalOffTaskSalary = popoverShowsHistoricalOffTaskSalary
+        updated.popoverShowsTodayOffTaskDuration = popoverShowsTodayOffTaskDuration
+        updated.popoverShowsWeekOffTaskDuration = popoverShowsWeekOffTaskDuration
+        updated.popoverShowsSalaryCycleOffTaskDuration = popoverShowsSalaryCycleOffTaskDuration
+        updated.popoverShowsHistoricalOffTaskDuration = popoverShowsHistoricalOffTaskDuration
+        updated.statusItemClickShowsPrivatePopover = statusItemClickShowsPrivatePopover
+        updated.statusBarShowsAppIcon = statusBarShowsAppIcon
+        updated.statusBarShowsCurrencySymbol = statusBarShowsCurrencySymbol
+        updated.statusBarShowsOffTaskStatusIcon = statusBarShowsOffTaskStatusIcon
+        updated.statusBarShowsOffTaskStatusIconOnlyWhenActive = statusBarShowsOffTaskStatusIconOnlyWhenActive
+        updated.statusBarSalaryAnimationStyle = statusBarSalaryAnimationStyle
+        updated.moneyDecimalPlaces = moneyDecimalPlaces
+        updated.shortcutActionSequence = shortcutActionSequence
+        updated.offTaskShortcutEnabled = offTaskShortcutEnabled
+        updated.offTaskShortcutModifiers = offTaskShortcutModifiers
+        updated.offTaskShortcutKeyCode = offTaskShortcutKeyCode
+        updated.idleUsesLowFrequencyUpdates = idleUsesLowFrequencyUpdates
+        updated.refreshIntervalSeconds = refreshIntervalSeconds
+        updated.lunchBreakShowsColor = lunchBreakShowsColor
+        updated.dinnerBreakShowsColor = dinnerBreakShowsColor
+        updated.workProgressShowsGrid = workProgressShowsGrid
+        updated.workProgressShowsSegmentLabels = workProgressShowsSegmentLabels
+        updated.workProgressGridMinutes = workProgressGridMinutes
+        updated.workProgressDecimalPlaces = workProgressDecimalPlaces
+        updated.workProgressColorHex = workProgressColorHex
+        updated.lunchBreakColorHex = lunchBreakColorHex
+        updated.dinnerBreakColorHex = dinnerBreakColorHex
+        updated.holidayPastColorHex = holidayPastColorHex
+        updated.holidayFutureColorHex = holidayFutureColorHex
+        updated.popoverSalaryColorHex = popoverSalaryColorHex
+        updated.statusBarSalaryColorHex = statusBarSalaryColorHex
+        updated.normalize()
+        return updated
+    }
+}
+
+/// 单独配置导入导出的文件格式。`preferences` 只包含偏好配置，和数据文件保持字段零交集。
+struct SalaryConfigExportDocument: Codable {
+    var documentType = "salarydance.config"
+    var schemaVersion = 1
+    var exportedAt = Date()
+    var preferences: SalaryPreferenceSettings
+    var settingsSidebarWidth: Double?
+}
+
+/// 数据导入导出的文件格式。包含薪资数据、补贴、计薪规则、工作时间和用户产生的全部摸鱼记录。
+struct SalaryDataExportDocument: Codable {
+    var documentType = "salarydance.data"
+    var schemaVersion = 1
+    var exportedAt = Date()
+    var salaryData: SalaryDataSettings
+    var offTaskSessions: [OffTaskSession]
+}
+
+enum SalaryDataTransferError: LocalizedError {
+    case invalidConfigFile
+    case invalidDataFile
+    case invalidOffTaskData(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidConfigFile:
+            return "无法识别配置文件，请选择薪动导出的配置 JSON。"
+        case .invalidDataFile:
+            return "无法识别数据文件，请选择薪动导出的数据 JSON。"
+        case .invalidOffTaskData(let message):
+            return "摸鱼记录无效：\(message)。"
+        }
+    }
+}
+
+/// 集中处理导入导出 JSON 编解码，避免设置页直接依赖具体文件结构。
+enum SalaryDataTransfer {
+    static func encodeConfigDocument(config: SalaryConfig, settingsSidebarWidth: Double?) throws -> Data {
+        let document = SalaryConfigExportDocument(
+            preferences: SalaryPreferenceSettings(config: config),
+            settingsSidebarWidth: settingsSidebarWidth
+        )
+        return try jsonEncoder().encode(document)
+    }
+
+    static func decodeConfigDocument(from data: Data) throws -> SalaryConfigExportDocument {
+        if let document = try? decode(SalaryConfigExportDocument.self, from: data),
+           document.documentType == "salarydance.config" {
+            return document
+        }
+
+        throw SalaryDataTransferError.invalidConfigFile
+    }
+
+    static func encodeDataDocument(config: SalaryConfig, offTaskSessions: [OffTaskSession]) throws -> Data {
+        let document = SalaryDataExportDocument(
+            salaryData: SalaryDataSettings(config: config),
+            offTaskSessions: offTaskSessions
+        )
+        return try jsonEncoder().encode(document)
+    }
+
+    static func decodeDataDocument(from data: Data) throws -> SalaryDataExportDocument {
+        if let document = try? decode(SalaryDataExportDocument.self, from: data),
+           document.documentType == "salarydance.data" {
+            return document
+        }
+
+        throw SalaryDataTransferError.invalidDataFile
+    }
+
+    private static func jsonEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return encoder
+    }
+
+    private static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(type, from: data)
+        } catch {
+            let decoder = JSONDecoder()
+            return try decoder.decode(type, from: data)
         }
     }
 }

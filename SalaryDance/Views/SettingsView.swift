@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 
 /// 设置页左侧导航分类。分类数量较多时保持这里的 title/subtitle/icon 同步，避免侧边栏和内容区语义漂移。
 private enum SettingsCategory: String, CaseIterable, Identifiable {
@@ -32,7 +34,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .offTask: return "今日统计和历史记录"
         case .shortcut: return "快捷键录制和动作顺序"
         case .calendar: return "计薪规则、节假日和调休日"
-        case .app: return "启动和刷新策略"
+        case .app: return "启动、刷新和备份迁移"
         }
     }
 
@@ -46,6 +48,19 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .calendar: return "calendar"
         case .app: return "gearshape"
         }
+    }
+}
+
+private struct DataTransferStatus: Equatable {
+    let message: String
+    let isError: Bool
+
+    static func success(_ message: String) -> DataTransferStatus {
+        DataTransferStatus(message: message, isError: false)
+    }
+
+    static func failure(_ message: String) -> DataTransferStatus {
+        DataTransferStatus(message: message, isError: true)
     }
 }
 
@@ -413,6 +428,7 @@ struct SettingsView: View {
     @State private var expandedOffTaskHistoryYears: Set<String> = []
     @State private var expandedOffTaskHistoryMonths: Set<String> = []
     @State private var expandedOffTaskHistoryDays: Set<String> = []
+    @State private var dataTransferStatus: DataTransferStatus?
     private let sidebarWidthRange: ClosedRange<Double> = 168...310
     private static let settingsPageContentPadding: CGFloat = 24
 
@@ -431,12 +447,7 @@ struct SettingsView: View {
         .frame(minWidth: 920, idealWidth: 980, minHeight: 600, idealHeight: 680)
         .onAppear {
             sidebarWidth = clampedSidebarWidth(storedSidebarWidth)
-            tempSalaryAmount = configManager.config.salaryAmount > 0
-                ? InputValidation.formattedDecimal(configManager.config.salaryAmount, maxFractionDigits: 2)
-                : ""
-            refreshIntervalText = formatRefreshInterval(configManager.config.resolvedRefreshIntervalSeconds)
-            fixedMonthlyWorkdaysText = formatWorkdayCount(configManager.config.resolvedFixedMonthlyWorkdays)
-            salaryCycleStartDayText = "\(configManager.config.resolvedMonthlySalaryCycleStartDay)"
+            refreshInputTextsFromConfig()
         }
         .onChange(of: configManager.config.resolvedRefreshIntervalSeconds) { _, newValue in
             if !isRefreshIntervalFocused {
@@ -477,6 +488,15 @@ struct SettingsView: View {
 
     private func clampedSidebarWidth(_ value: Double) -> Double {
         InputValidation.clamped(value, in: sidebarWidthRange)
+    }
+
+    private func refreshInputTextsFromConfig() {
+        tempSalaryAmount = configManager.config.salaryAmount > 0
+            ? InputValidation.formattedDecimal(configManager.config.salaryAmount, maxFractionDigits: 2)
+            : ""
+        refreshIntervalText = formatRefreshInterval(configManager.config.resolvedRefreshIntervalSeconds)
+        fixedMonthlyWorkdaysText = formatWorkdayCount(configManager.config.resolvedFixedMonthlyWorkdays)
+        salaryCycleStartDayText = "\(configManager.config.resolvedMonthlySalaryCycleStartDay)"
     }
 
     /// 左侧分类列表，整块按钮都可点击，避免只能点中文字的问题。
@@ -604,6 +624,7 @@ struct SettingsView: View {
             workDaySection
             specialWorkdaySection
         case .app:
+            dataPortabilitySection
             appBehaviorSection
         }
     }
@@ -1611,6 +1632,14 @@ struct SettingsView: View {
                         set: { configManager.config.statusBarShowsOffTaskStatusIcon = $0 }
                     ))
 
+                    Toggle("仅摸鱼中显示", isOn: Binding(
+                        get: { configManager.config.statusBarDisplaysOffTaskStatusIconOnlyWhenActive },
+                        set: { configManager.config.statusBarShowsOffTaskStatusIconOnlyWhenActive = $0 }
+                    ))
+                    .padding(.leading, 18)
+                    .disabled(!configManager.config.statusBarDisplaysOffTaskStatusIcon)
+                    .help("关闭后，未摸鱼时也会在状态栏显示灰色鱼图标。")
+
                     Toggle("显示 ¥ 符号", isOn: Binding(
                         get: { configManager.config.statusBarDisplaysCurrencySymbol },
                         set: { configManager.config.statusBarShowsCurrencySymbol = $0 }
@@ -2576,6 +2605,76 @@ struct SettingsView: View {
         }
     }
 
+    /// 导入导出分成数据和配置两类；两者字段零交集，合并后覆盖除节假日缓存以外的可迁移内容。
+    private var dataPortabilitySection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 14) {
+                dataTransferRow(
+                    title: "数据",
+                    detail: "包含薪资数据、补贴、计薪规则、工作时间和所有摸鱼记录；",
+                    exportTitle: "导出数据",
+                    importTitle: "导入数据",
+                    exportAction: exportAllData,
+                    importAction: importAllData
+                )
+
+                Divider()
+
+                dataTransferRow(
+                    title: "配置",
+                    detail: "包含展示、快捷键、颜色、刷新、开机启动等偏好；",
+                    exportTitle: "导出配置",
+                    importTitle: "导入配置",
+                    exportAction: exportConfig,
+                    importAction: importConfig
+                )
+
+                if let dataTransferStatus {
+                    Label(dataTransferStatus.message, systemImage: dataTransferStatus.isError ? "exclamationmark.triangle" : "checkmark.circle")
+                        .font(.caption)
+                        .foregroundColor(dataTransferStatus.isError ? .orange : .secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+        } label: {
+            Label("导入导出", systemImage: "externaldrive")
+                .font(.headline)
+        }
+    }
+
+    private func dataTransferRow(
+        title: String,
+        detail: String,
+        exportTitle: String,
+        importTitle: String,
+        exportAction: @escaping () -> Void,
+        importAction: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            HStack(spacing: 8) {
+                Button(action: exportAction) {
+                    Label(exportTitle, systemImage: "square.and.arrow.up")
+                }
+                Button(action: importAction) {
+                    Label(importTitle, systemImage: "square.and.arrow.down")
+                }
+            }
+            .controlSize(.small)
+        }
+    }
+
     /// 应用行为包含开机启动、空闲降频和用户可调刷新间隔。
     private var appBehaviorSection: some View {
         GroupBox {
@@ -2634,6 +2733,140 @@ struct SettingsView: View {
             Label("应用行为", systemImage: "gearshape")
                 .font(.headline)
         }
+    }
+
+    private func exportAllData() {
+        do {
+            guard let url = savePanelURL(
+                title: "导出数据",
+                defaultName: "SalaryDance-Data-\(dataTransferTimestamp()).json"
+            ) else { return }
+
+            let data = try SalaryDataTransfer.encodeDataDocument(
+                config: configManager.config,
+                offTaskSessions: offTaskTracker.sessions
+            )
+            try data.write(to: url, options: [.atomic])
+            dataTransferStatus = .success("数据已导出：\(url.lastPathComponent)")
+        } catch {
+            reportDataTransferFailure("数据导出失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func importAllData() {
+        do {
+            guard let url = openPanelURL(title: "导入数据") else { return }
+            let data = try Data(contentsOf: url)
+            let document = try SalaryDataTransfer.decodeDataDocument(from: data)
+            let normalizedSessions = try OffTaskTracker.normalizedImportedSessions(document.offTaskSessions)
+
+            guard confirmImport(
+                title: "导入数据？",
+                message: "这会替换当前薪资数据、补贴、计薪规则、工作时间和所有摸鱼记录；展示、快捷键和应用偏好不会改变。"
+            ) else { return }
+
+            applyImportedSalaryData(document.salaryData)
+            try offTaskTracker.replaceSessionsForImport(normalizedSessions)
+            dataTransferStatus = .success("数据已导入：\(url.lastPathComponent)")
+        } catch {
+            reportDataTransferFailure("数据导入失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func exportConfig() {
+        do {
+            guard let url = savePanelURL(
+                title: "导出配置",
+                defaultName: "SalaryDance-Config-\(dataTransferTimestamp()).json"
+            ) else { return }
+
+            let data = try SalaryDataTransfer.encodeConfigDocument(
+                config: configManager.config,
+                settingsSidebarWidth: storedSidebarWidth
+            )
+            try data.write(to: url, options: [.atomic])
+            dataTransferStatus = .success("配置已导出：\(url.lastPathComponent)")
+        } catch {
+            reportDataTransferFailure("配置导出失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func importConfig() {
+        do {
+            guard let url = openPanelURL(title: "导入配置") else { return }
+            let data = try Data(contentsOf: url)
+            let document = try SalaryDataTransfer.decodeConfigDocument(from: data)
+
+            guard confirmImport(
+                title: "导入配置？",
+                message: "这会替换当前展示、快捷键、颜色、刷新、开机启动等偏好；薪资、补贴和摸鱼记录不会改变。"
+            ) else { return }
+
+            applyImportedPreferenceConfig(document.preferences, sidebarWidth: document.settingsSidebarWidth)
+            dataTransferStatus = .success("配置已导入：\(url.lastPathComponent)")
+        } catch {
+            reportDataTransferFailure("配置导入失败：\(error.localizedDescription)")
+        }
+    }
+
+    private func applyImportedSalaryData(_ imported: SalaryDataSettings) {
+        configManager.replaceSalaryDataForImport(imported)
+        refreshInputTextsFromConfig()
+        ensureSalaryCycleHolidayData()
+    }
+
+    private func applyImportedPreferenceConfig(_ imported: SalaryPreferenceSettings, sidebarWidth importedSidebarWidth: Double?) {
+        configManager.replacePreferenceConfigForImport(imported)
+        if let importedSidebarWidth {
+            let clampedWidth = clampedSidebarWidth(importedSidebarWidth)
+            storedSidebarWidth = clampedWidth
+            sidebarWidth = clampedWidth
+        }
+        LaunchAtLoginManager.setEnabled(configManager.config.launchAtLogin)
+        GlobalShortcutMonitor.shared.restart()
+        refreshInputTextsFromConfig()
+    }
+
+    private func savePanelURL(title: String, defaultName: String) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = title
+        panel.nameFieldStringValue = defaultName
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func openPanelURL(title: String) -> URL? {
+        let panel = NSOpenPanel()
+        panel.title = title
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    private func confirmImport(title: String, message: String) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "导入")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private func reportDataTransferFailure(_ message: String) {
+        dataTransferStatus = .failure(message)
+        NSSound.beep()
+    }
+
+    private func dataTransferTimestamp() -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: Date())
     }
 
     /// 快捷键动作使用点击排序，替代拖拽，避免拖拽重影和误操作。
