@@ -1,14 +1,14 @@
 # 配置、薪资计算与刷新机制
 
-本文档说明配置字段、薪资换算、工作时间、节假日和刷新机制；修改 `SalaryConfig`、`SalaryViewModel` 或节假日逻辑时加载。
+本文档说明持久化、导入导出、薪资换算、工作时间、节假日和刷新机制；修改 `SalaryConfig`、`SalaryViewModel`、`OffTaskTracker` 或节假日逻辑时加载。
 
-## 配置存储
+## 持久化与导入导出
 
 | 项 | 说明 |
 |----|------|
 | 存储 | `UserDefaults.standard` |
-| 主配置 key | `salary_config` |
-| 编解码 | `SalaryConfig` 使用 `JSONEncoder` / `JSONDecoder` |
+| 主配置 key | `salary_config`，由 `SalaryConfigManager` 读写 |
+| 主配置结构 | `SalaryConfig`，包含薪资数据和偏好配置 |
 | 摸鱼记录 key | `off_task_sessions` |
 | 摸鱼记录结构 | `[OffTaskSession]` |
 | 节假日 key | `chinese_holidays_data_by_year` |
@@ -61,7 +61,7 @@
 
 补贴再按自身规则计入：
 
-关闭的补贴保留配置但不参与任何计算，方便用户临时对比开启前后的实时收入和换算结果。
+关闭的补贴保留配置但不参与任何计算，方便用户对比开启前后的实时收入和换算结果。
 
 | 补贴类型 | 对日薪的影响 | 对月薪/年薪的影响 |
 |----------|--------------|-------------------|

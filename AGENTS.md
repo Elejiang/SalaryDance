@@ -4,26 +4,13 @@
 
 ## 快速入口
 
-- 构建：`xcodebuild -project SalaryDance.xcodeproj -scheme SalaryDance -configuration Debug -derivedDataPath /tmp/SalaryDanceDerivedData build`
-- 本地启动：`scripts/dev_run.sh`
-- 打包 DMG：`scripts/package_dmg.sh`
+- 执行构建、运行、打包任务时加载 `docs/development-guide.md`。
 - Xcode 工程：`SalaryDance.xcodeproj`
 - Bundle ID：`com.salarydance.app`
 
-## 模块结构
+## 模块索引
 
-| 路径 | 职责 |
-|------|------|
-| `SalaryDance/SalaryDanceApp.swift` | App 入口，启动状态栏和全局快捷键 |
-| `SalaryDance/Models/SalaryConfig.swift` | 配置模型、薪资换算、时间段、快捷键动作 |
-| `SalaryDance/Models/SalaryWorkTimeline.swift` | 真实工作窗口和有效计薪区间 |
-| `SalaryDance/Models/OffTaskTracker.swift` | 摸鱼状态记录、实时结算和历史统计 |
-| `SalaryDance/ViewModels/SalaryViewModel.swift` | 今日收入、工作状态、进度、刷新定时器 |
-| `SalaryDance/Helpers/` | 节假日、全局快捷键、开机启动 |
-| `SalaryDance/Views/FloatingPanelView.swift` | 状态栏控制器、弹窗定位、设置窗口控制 |
-| `SalaryDance/Views/SettingsView.swift` | 设置页主体 |
-| `SalaryDance/Views/SalaryDisplayView.swift` | 弹窗薪资、进度、状态展示 |
-| `scripts/` | 本地开发启动和 DMG 打包脚本 |
+了解模块职责和依赖关系时加载 `SPEC.md`；修改具体领域前加载对应 L2 文档。
 
 ## 操作红线
 
@@ -33,8 +20,7 @@
 ## 代码风格
 
 - 优先沿用现有 SwiftUI/AppKit 混合结构，不为了抽象而抽象。
-- 注释覆盖关键配置、计算、状态流转、AppKit/SwiftUI 桥接和非直观 UI 布局；解释原因和边界，不逐行复述代码。
-- 关键声明和关键逻辑块需要有解释原因和边界的注释。
+- 关键配置、计算、状态流转、AppKit/SwiftUI 桥接和非直观 UI 布局需要解释原因和边界，不逐行复述代码。
 - 设置项较多时优先分区、预览和输入校验，不堆叠长说明。
 - UI 修改要保持真实弹窗、状态栏和设置预览的展示逻辑一致。
 
@@ -76,4 +62,4 @@
 - 长期契约变化后更新对应文档，包括配置字段、核心计算规则、刷新机制、打包流程、模块边界和开发流程。
 - 一次性功能迭代、局部修复、实现细节微调不沉淀到 `SPEC.md`、L2 文档或项目规范文档，除非它改变长期约定或会影响后续开发判断。
 - 新增模块或重大重构后，评估是否需要更新 `SPEC.md` 和 L2 文档。
-- 知识不重复：根文档只放规则和索引，细节放入对应 L2 文档。
+- 根文档保留规则和索引；专题细节写入对应 L2 文档。
