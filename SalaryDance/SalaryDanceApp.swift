@@ -35,4 +35,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GlobalShortcutMonitor.shared.stop()
         StatusBarController.shared.stop()
     }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        StatusBarController.shared.revealStatusItemAppIcon()
+        return true
+    }
 }

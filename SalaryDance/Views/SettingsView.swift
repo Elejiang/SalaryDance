@@ -1628,7 +1628,6 @@ struct SettingsView: View {
                         get: { configManager.config.statusBarDisplaysAppIcon },
                         set: { configManager.config.statusBarShowsAppIcon = $0 }
                     ))
-                    .disabled(!configManager.config.displaysEarningsInStatusBar)
 
                     Toggle("显示摸鱼状态图标", isOn: Binding(
                         get: { configManager.config.statusBarDisplaysOffTaskStatusIcon },

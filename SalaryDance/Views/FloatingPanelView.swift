@@ -37,21 +37,6 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         guard !isStarted else { return }
         isStarted = true
 
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem = item
-
-        if let button = item.button {
-            button.image = NSImage(systemSymbolName: "yensign.circle.fill", accessibilityDescription: "薪动")
-            button.imagePosition = .imageOnly
-            button.target = self
-            button.action = #selector(statusItemClicked)
-            button.toolTip = "薪动"
-            statusItemHostingView.frame = button.bounds
-            statusItemHostingView.autoresizingMask = [.width, .height]
-            statusItemHostingView.removeFromSuperview()
-            button.addSubview(statusItemHostingView)
-        }
-
         popover.behavior = .transient
         popover.delegate = self
         let popoverContentController = NSHostingController(
@@ -100,12 +85,18 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
     /// 清理状态栏项和 Combine 订阅，主要用于 App 退出或未来测试场景。
     func stop() {
         closePopover()
-        if let statusItem {
-            NSStatusBar.system.removeStatusItem(statusItem)
-            self.statusItem = nil
-        }
+        removeStatusItem()
         cancellables.removeAll()
         isStarted = false
+    }
+
+    /// App 已隐藏所有状态栏入口时，再次启动 App 用 App 图标恢复一个可点击入口。
+    func revealStatusItemAppIcon() {
+        if !SalaryConfigManager.shared.config.statusBarShowsAppIcon {
+            SalaryConfigManager.shared.config.statusBarShowsAppIcon = true
+        } else {
+            updateStatusItemTitle()
+        }
     }
 
     /// 执行用户配置的快捷键动作序列，每按一次推进到下一项。
@@ -361,16 +352,22 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         isContentMasked = masked
     }
 
-    /// 根据配置更新菜单栏内容；关闭实时金额时回到系统符号图标，避免留下空白承载视图。
+    /// 根据配置更新菜单栏内容；没有任何状态栏内容时移除状态项，避免留下空白或兜底图标。
     private func updateStatusItemTitle() {
-        guard let statusItem,
-              let button = statusItem.button else { return }
         let config = SalaryConfigManager.shared.config
         let showsEarnings = config.displaysEarningsInStatusBar
         let isOffTaskActive = offTaskTracker.isActive
         let showsOffTaskIcon = config.statusBarDisplaysOffTaskStatusIcon(isOffTaskActive: isOffTaskActive)
+        let showsIcon = config.statusBarDisplaysAppIcon
         let usesHostedContent = showsEarnings || showsOffTaskIcon
-        let showsIcon = !showsEarnings || config.statusBarDisplaysAppIcon
+        guard showsIcon || usesHostedContent else {
+            removeStatusItem()
+            return
+        }
+
+        guard let statusItem = ensureStatusItem(),
+              let button = statusItem.button else { return }
+
         let tooltip = statusItemTooltip(config: config, showsOffTaskIcon: showsOffTaskIcon)
         if button.toolTip != tooltip {
             button.toolTip = tooltip
@@ -442,6 +439,42 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         lastStatusAmountText = amount
 
         rememberVisibleStatusItemFrame(from: button)
+    }
+
+    /// 状态栏项可被配置隐藏，后续实时薪资、摸鱼图标或恢复入口再次需要展示时再创建。
+    @discardableResult
+    private func ensureStatusItem() -> NSStatusItem? {
+        if let statusItem {
+            return statusItem
+        }
+
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = item
+
+        if let button = item.button {
+            button.image = NSImage(systemSymbolName: "yensign.circle.fill", accessibilityDescription: "薪动")
+            button.imagePosition = .imageOnly
+            button.target = self
+            button.action = #selector(statusItemClicked)
+            button.toolTip = "薪动"
+            statusItemHostingView.frame = button.bounds
+            statusItemHostingView.autoresizingMask = [.width, .height]
+            statusItemHostingView.removeFromSuperview()
+            button.addSubview(statusItemHostingView)
+        }
+
+        return item
+    }
+
+    private func removeStatusItem() {
+        guard let statusItem else { return }
+        statusItemModel.update(.empty)
+        lastStatusAmountText = ""
+        lastStatusItemWidth = nil
+        lastStatusItemHeight = nil
+        statusItemHostingView.removeFromSuperview()
+        NSStatusBar.system.removeStatusItem(statusItem)
+        self.statusItem = nil
     }
 
     /// 状态栏项宽度变化会触发系统菜单栏重新布局；只在尺寸真正变化时更新。
