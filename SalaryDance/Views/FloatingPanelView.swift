@@ -268,11 +268,24 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
 
     /// 弹窗展示完成后开启失焦关闭监听，并根据内容重新收敛高度。
     private func finishPopoverPresentation() {
+        focusPopoverWindow()
         startPopoverDismissMonitoring()
         updateRefreshCadence()
         DispatchQueue.main.async { [weak self] in
+            self?.focusPopoverWindow()
             self?.updatePopoverContentSize()
         }
+    }
+
+    /// 菜单栏点击打开的 `NSPopover` 有时不会立即成为 key window，SwiftUI material 会按非激活窗口绘制成发灰半透明状态。
+    private func focusPopoverWindow() {
+        guard popover.isShown,
+              let popoverWindow = popover.contentViewController?.view.window else {
+            return
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        popoverWindow.makeKeyAndOrderFront(nil)
     }
 
     /// 关闭弹窗时恢复非脱敏状态；脱敏只属于弹窗本身，不影响状态栏金额。
