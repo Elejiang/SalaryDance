@@ -329,6 +329,10 @@ private struct OffTaskSessionRowView: View {
                 validationMessage = "开始时间必须在当前工作窗口内"
                 return
             }
+            guard SalaryWorkTimeline.paidInterval(containing: startDate, in: activeWindow, config: config) != nil else {
+                validationMessage = "开始时间必须在计薪区间内"
+                return
+            }
         } else {
             guard endDate > startDate else {
                 validationMessage = "结束时间必须晚于开始时间"

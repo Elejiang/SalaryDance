@@ -98,8 +98,18 @@ final class OffTaskTracker: ObservableObject {
         var sessionCount: Int = 0
     }
 
+    private struct SummaryMapCache {
+        let sessions: [OffTaskSession]
+        let config: SalaryConfig
+        let nowTick: Int
+        let calendarIdentifier: Calendar.Identifier
+        let calendarTimeZone: TimeZone
+        let result: [Date: SummaryAccumulator]
+    }
+
     private let defaults = UserDefaults.standard
     private let storageKey = "off_task_sessions"
+    private var summaryMapCache: SummaryMapCache?
 
     private init() {
         sessions = Self.loadSessions(defaults: defaults, key: storageKey)
@@ -214,17 +224,7 @@ final class OffTaskTracker: ObservableObject {
     func summary(for workday: Date, config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> OffTaskDailySummary {
         let day = calendar.startOfDay(for: workday)
         let map = summaryMap(config: config, now: now, calendar: calendar)
-        let accumulator = map[day] ?? SummaryAccumulator()
-        let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar)
-
-        return OffTaskDailySummary(
-            workday: day,
-            dayKey: Self.dayKey(for: day, calendar: calendar),
-            paidSeconds: accumulator.paidSeconds,
-            amount: accumulator.amount,
-            sessionCount: accumulator.sessionCount,
-            isWorkFinished: window.map { now >= $0.end } ?? false
-        )
+        return dailySummary(for: day, accumulator: map[day] ?? SummaryAccumulator(), config: config, now: now, calendar: calendar)
     }
 
     func recentSummaries(limit: Int = 14, config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> [OffTaskDailySummary] {
@@ -236,7 +236,7 @@ final class OffTaskTracker: ObservableObject {
             .sorted(by: >)
             .prefix(limit)
             .map { day in
-                summary(for: day, config: config, now: now, calendar: calendar)
+                dailySummary(for: day, accumulator: map[day] ?? SummaryAccumulator(), config: config, now: now, calendar: calendar)
             }
     }
 
@@ -308,8 +308,37 @@ final class OffTaskTracker: ObservableObject {
         return nil
     }
 
+    private func dailySummary(
+        for day: Date,
+        accumulator: SummaryAccumulator,
+        config: SalaryConfig,
+        now: Date,
+        calendar: Calendar
+    ) -> OffTaskDailySummary {
+        let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar)
+
+        return OffTaskDailySummary(
+            workday: day,
+            dayKey: Self.dayKey(for: day, calendar: calendar),
+            paidSeconds: accumulator.paidSeconds,
+            amount: accumulator.amount,
+            sessionCount: accumulator.sessionCount,
+            isWorkFinished: window.map { now >= $0.end } ?? false
+        )
+    }
+
     private func summaryMap(config: SalaryConfig, now: Date, calendar: Calendar) -> [Date: SummaryAccumulator] {
-        sessions.reduce(into: [:]) { result, session in
+        let nowTick = summaryMapNowTick(now: now)
+        if let cached = summaryMapCache,
+           cached.sessions == sessions,
+           cached.config == config,
+           cached.nowTick == nowTick,
+           cached.calendarIdentifier == calendar.identifier,
+           cached.calendarTimeZone == calendar.timeZone {
+            return cached.result
+        }
+
+        let result: [Date: SummaryAccumulator] = sessions.reduce(into: [:]) { result, session in
             let end = session.end ?? now
             guard end > session.start else { return }
 
@@ -335,6 +364,22 @@ final class OffTaskTracker: ObservableObject {
                 result[window.workday] = accumulator
             }
         }
+
+        summaryMapCache = SummaryMapCache(
+            sessions: sessions,
+            config: config,
+            nowTick: nowTick,
+            calendarIdentifier: calendar.identifier,
+            calendarTimeZone: calendar.timeZone,
+            result: result
+        )
+        return result
+    }
+
+    private func summaryMapNowTick(now: Date) -> Int {
+        // 已结束记录与当前时间无关；进行中记录才需要按秒刷新实时累计。
+        guard sessions.contains(where: { $0.end == nil }) else { return 0 }
+        return Int(now.timeIntervalSinceReferenceDate.rounded(.down))
     }
 
     private func sessionSummary(for session: OffTaskSession, config: SalaryConfig, now: Date, calendar: Calendar) -> OffTaskSessionSummary {
