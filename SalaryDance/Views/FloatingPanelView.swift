@@ -24,6 +24,8 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
     private var isStarted = false
     private var shortcutActionIndex = 0
     private var lastStatusAmountText = ""
+    private var lastStatusItemWidth: CGFloat?
+    private var lastStatusItemHeight: CGFloat?
     private let popoverWidth: CGFloat = 280
 
     private override init() {
@@ -355,10 +357,17 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         let showsOffTaskIcon = config.statusBarDisplaysOffTaskStatusIcon
         let usesHostedContent = showsEarnings || showsOffTaskIcon
         let showsIcon = !showsEarnings || config.statusBarDisplaysAppIcon
-        button.toolTip = statusItemTooltip(config: config, showsOffTaskIcon: showsOffTaskIcon)
+        let tooltip = statusItemTooltip(config: config, showsOffTaskIcon: showsOffTaskIcon)
+        if button.toolTip != tooltip {
+            button.toolTip = tooltip
+        }
 
-        button.title = ""
-        button.attributedTitle = NSAttributedString(string: "")
+        if !button.title.isEmpty {
+            button.title = ""
+        }
+        if button.attributedTitle.length > 0 {
+            button.attributedTitle = NSAttributedString(string: "")
+        }
 
         let amount = showsEarnings
             ? viewModel.formattedEarnings(showCurrencySymbol: config.statusBarDisplaysCurrencySymbol)
@@ -369,41 +378,49 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         let animationStyle = config.resolvedStatusBarSalaryAnimationStyle
 
         if !usesHostedContent {
-            statusItem.length = NSStatusItem.squareLength
-            statusItemHostingView.isHidden = true
-            button.image = NSImage(systemSymbolName: "yensign.circle.fill", accessibilityDescription: "薪动")
-            button.imagePosition = .imageOnly
-            statusItemModel.showsIcon = false
-            statusItemModel.amount = nil
-            statusItemModel.showsOffTaskIcon = false
+            if abs(statusItem.length - NSStatusItem.squareLength) > 0.5 {
+                statusItem.length = NSStatusItem.squareLength
+            }
+            lastStatusItemWidth = nil
+            lastStatusItemHeight = nil
+            if !statusItemHostingView.isHidden {
+                statusItemHostingView.isHidden = true
+            }
+            if button.image == nil {
+                button.image = NSImage(systemSymbolName: "yensign.circle.fill", accessibilityDescription: "薪动")
+            }
+            if button.imagePosition != .imageOnly {
+                button.imagePosition = .imageOnly
+            }
+            statusItemModel.update(.empty)
             lastStatusAmountText = ""
             rememberVisibleStatusItemFrame(from: button)
             return
         }
 
-        button.image = nil
-        button.imagePosition = .noImage
-        statusItemHostingView.isHidden = false
+        if button.image != nil {
+            button.image = nil
+        }
+        if button.imagePosition != .noImage {
+            button.imagePosition = .noImage
+        }
+        if statusItemHostingView.isHidden {
+            statusItemHostingView.isHidden = false
+        }
 
         let height = NSStatusBar.system.thickness
         let width = statusItemWidth(showsIcon: showsIcon, amount: showsEarnings ? amount : nil, showsOffTaskIcon: showsOffTaskIcon)
-        statusItem.length = width
-        statusItemHostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        updateStatusItemGeometry(statusItem: statusItem, width: width, height: height)
 
-        let updateModel = {
-            self.statusItemModel.showsIcon = showsIcon
-            self.statusItemModel.amount = showsEarnings ? amount : nil
-            self.statusItemModel.color = config.statusBarSalaryNSColor
-            self.statusItemModel.animationStyle = animationStyle
-            self.statusItemModel.showsOffTaskIcon = showsOffTaskIcon
-            self.statusItemModel.offTaskIsActive = self.offTaskTracker.isActive
-        }
-
-        if shouldAnimate, animationStyle == .rolling {
-            withAnimation(.easeInOut(duration: 0.15), updateModel)
-        } else {
-            updateModel()
-        }
+        let state = StatusBarItemState(
+            showsIcon: showsIcon,
+            amount: showsEarnings ? amount : nil,
+            salaryColorHex: config.resolvedStatusBarSalaryColorHex,
+            animationStyle: animationStyle,
+            showsOffTaskIcon: showsOffTaskIcon,
+            offTaskIsActive: offTaskTracker.isActive
+        )
+        statusItemModel.update(state)
 
         if shouldAnimate, animationStyle == .bounce {
             animateStatusItemBounce(statusItemHostingView)
@@ -411,6 +428,25 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         lastStatusAmountText = amount
 
         rememberVisibleStatusItemFrame(from: button)
+    }
+
+    /// 状态栏项宽度变化会触发系统菜单栏重新布局；只在尺寸真正变化时更新。
+    private func updateStatusItemGeometry(statusItem: NSStatusItem, width: CGFloat, height: CGFloat) {
+        let needsWidthUpdate = abs(statusItem.length - width) > 0.5
+        if needsWidthUpdate {
+            statusItem.length = width
+        }
+
+        let needsFrameUpdate = lastStatusItemWidth.map { abs($0 - width) > 0.5 } ?? true
+            || lastStatusItemHeight.map { abs($0 - height) > 0.5 } ?? true
+            || abs(statusItemHostingView.frame.width - width) > 0.5
+            || abs(statusItemHostingView.frame.height - height) > 0.5
+
+        if needsFrameUpdate {
+            statusItemHostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+            lastStatusItemWidth = width
+            lastStatusItemHeight = height
+        }
     }
 
     private func statusItemTooltip(config: SalaryConfig, showsOffTaskIcon: Bool) -> String {
@@ -637,13 +673,32 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
 }
 
 /// SwiftUI 状态栏视图的轻量模型，避免直接把完整配置暴露给状态栏渲染层。
+private struct StatusBarItemState: Equatable {
+    static let empty = StatusBarItemState(
+        showsIcon: false,
+        amount: nil,
+        salaryColorHex: SalaryColor.defaultStatusBarSalaryHex,
+        animationStyle: .rolling,
+        showsOffTaskIcon: false,
+        offTaskIsActive: false
+    )
+
+    let showsIcon: Bool
+    let amount: String?
+    let salaryColorHex: String
+    let animationStyle: StatusBarSalaryAnimationStyle
+    let showsOffTaskIcon: Bool
+    let offTaskIsActive: Bool
+}
+
 private final class StatusBarItemModel: ObservableObject {
-    @Published var showsIcon = true
-    @Published var amount: String?
-    @Published var color: NSColor = .labelColor
-    @Published var animationStyle: StatusBarSalaryAnimationStyle = .rolling
-    @Published var showsOffTaskIcon = false
-    @Published var offTaskIsActive = false
+    @Published private(set) var state = StatusBarItemState.empty
+
+    /// 每秒刷新只发布一次状态，并跳过完全相同的值，避免状态栏 SwiftUI 树重复重绘。
+    func update(_ nextState: StatusBarItemState) {
+        guard state != nextState else { return }
+        state = nextState
+    }
 }
 
 /// 自定义状态栏内容，保持最初的紧凑格式，只在金额变化时做数字滚动。
@@ -651,22 +706,24 @@ private struct StatusBarItemContent: View {
     @ObservedObject var model: StatusBarItemModel
 
     var body: some View {
-        HStack(spacing: statusItemSpacing) {
-            if model.showsIcon {
+        let state = model.state
+
+        HStack(spacing: statusItemSpacing(for: state)) {
+            if state.showsIcon {
                 Image(systemName: "yensign.circle.fill")
                     .font(.system(size: NSFont.systemFontSize + 1, weight: .semibold))
                     .foregroundStyle(.primary)
                     .frame(width: 16, height: 16)
             }
 
-            if let amount = model.amount {
-                amountText(amount)
+            if let amount = state.amount {
+                amountText(amount, state: state)
             }
 
-            if model.showsOffTaskIcon {
-                Image(systemName: model.offTaskIsActive ? "fish.fill" : "fish")
+            if state.showsOffTaskIcon {
+                Image(systemName: state.offTaskIsActive ? "fish.fill" : "fish")
                     .font(.system(size: NSFont.systemFontSize, weight: .semibold))
-                    .foregroundStyle(model.offTaskIsActive ? Color.orange : Color.secondary)
+                    .foregroundStyle(state.offTaskIsActive ? Color.orange : Color.secondary)
                     .frame(width: 16, height: 16)
             }
         }
@@ -675,21 +732,24 @@ private struct StatusBarItemContent: View {
         .allowsHitTesting(false)
     }
 
-    private var statusItemSpacing: CGFloat {
-        let visibleCount = [model.showsIcon, model.amount != nil, model.showsOffTaskIcon].filter { $0 }.count
+    private func statusItemSpacing(for state: StatusBarItemState) -> CGFloat {
+        let visibleCount = [state.showsIcon, state.amount != nil, state.showsOffTaskIcon].filter { $0 }.count
         return visibleCount > 1 ? 4 : 0
     }
 
     /// 数字滚动复用 SwiftUI numericText，只让变动字符产生过渡。
     @ViewBuilder
-    private func amountText(_ amount: String) -> some View {
+    private func amountText(_ amount: String, state: StatusBarItemState) -> some View {
         let text = Text(amount)
             .font(.system(size: NSFont.systemFontSize, weight: .semibold))
             .monospacedDigit()
-            .foregroundStyle(Color(nsColor: model.color))
+            .foregroundStyle(Color(nsColor: SalaryColor.nsColor(
+                hex: state.salaryColorHex,
+                fallbackHex: SalaryColor.defaultStatusBarSalaryHex
+            )))
             .lineLimit(1)
 
-        if model.animationStyle == .rolling {
+        if state.animationStyle == .rolling {
             text
                 .contentTransition(.numericText())
                 .animation(.easeInOut(duration: 0.15), value: amount)

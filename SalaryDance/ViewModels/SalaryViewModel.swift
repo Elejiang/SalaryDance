@@ -66,10 +66,21 @@ final class SalaryViewModel: ObservableObject {
         let newTimer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.update(force: false)
         }
-        newTimer.tolerance = min(5, max(0.2, interval * 0.25))
+        newTimer.tolerance = Self.timerTolerance(for: interval)
         RunLoop.main.add(newTimer, forMode: .common)
         timer = newTimer
         update(force: true)
+    }
+
+    private static func timerTolerance(for interval: TimeInterval) -> TimeInterval {
+        // 状态栏实时金额依赖稳定节拍触发数字过渡；短间隔不参与大幅 coalescing，避免滚动节奏忽快忽慢。
+        if interval <= 1 {
+            return 0.02
+        }
+        if interval <= 2 {
+            return 0.05
+        }
+        return min(5, max(0.2, interval * 0.25))
     }
 
     private struct Snapshot {
