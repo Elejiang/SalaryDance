@@ -605,6 +605,11 @@ struct SettingsView: View {
             .padding(Self.settingsPageContentPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .coordinateSpace(name: Self.settingsPageScrollCoordinateSpace(for: category))
+    }
+
+    private static func settingsPageScrollCoordinateSpace(for category: SettingsCategory) -> String {
+        "settings-page-scroll-\(category.id)"
     }
 
     /// 分类到内容区的唯一入口，新增栏目时优先在这里挂载，避免散落在 body 中。
@@ -1728,8 +1733,7 @@ struct SettingsView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .topLeading)
 
-                displayPreviewPanel
-                    .frame(width: 300, alignment: .top)
+                displayPreviewStickyColumn
             }
         }
     }
@@ -1745,6 +1749,18 @@ struct SettingsView: View {
             Label("弹窗预览", systemImage: "eye")
                 .font(.headline)
         }
+    }
+
+    /// 预览和左侧配置仍在同一个滚动页内；用无状态几何计算固定位置，避免滚动时刷新整个设置页。
+    private var displayPreviewStickyColumn: some View {
+        GeometryReader { proxy in
+            let anchorMinY = proxy.frame(in: .named(Self.settingsPageScrollCoordinateSpace(for: .display))).minY
+            let stickyOffset = max(0, Self.settingsPageContentPadding - anchorMinY)
+            displayPreviewPanel
+                .offset(y: stickyOffset)
+                .zIndex(1)
+        }
+        .frame(width: 300, height: 0, alignment: .topLeading)
     }
 
     /// 弹窗内容开关逐项独立控制，避免“全部展示/全部隐藏”的粗粒度体验。
