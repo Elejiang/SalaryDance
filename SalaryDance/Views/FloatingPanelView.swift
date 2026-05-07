@@ -194,11 +194,10 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
         case shortcut
     }
 
-    /// 打开弹窗前强制刷新一次数据，避免用户看到上一轮定时器留下的旧金额。
+    /// 打开弹窗先走轻量路径，避免同步刷新和 SwiftUI fittingSize 阻塞点击反馈。
     private func showPopover(masked: Bool, from source: PopoverSource) {
         setContentMasked(masked)
-        viewModel.refreshNow()
-        updatePopoverContentSize()
+        popover.contentSize = preferredPopoverContentSize(for: SalaryConfigManager.shared.config)
 
         switch source {
         case .statusItem:
@@ -280,10 +279,10 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
 
     /// 弹窗展示完成后开启失焦关闭监听，并根据内容重新收敛高度。
     private func finishPopoverPresentation() {
-        focusPopoverWindow()
         startPopoverDismissMonitoring()
         updateRefreshCadence()
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            self?.viewModel.refreshNow()
             self?.focusPopoverWindow()
             self?.updatePopoverContentSize()
         }

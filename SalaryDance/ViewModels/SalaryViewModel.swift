@@ -45,7 +45,7 @@ final class SalaryViewModel: ObservableObject {
 
     /// 按当前刷新间隔启动定时器。
     func startTimer() {
-        startTimer(interval: updateInterval)
+        startTimer(interval: updateInterval, refreshImmediately: true)
     }
 
     /// 状态栏或弹窗显示状态变化时调整刷新频率。
@@ -56,15 +56,15 @@ final class SalaryViewModel: ObservableObject {
         )
         guard abs(updateInterval - normalizedInterval) > 0.01 else { return }
         updateInterval = normalizedInterval
-        startTimer(interval: normalizedInterval)
+        startTimer(interval: normalizedInterval, refreshImmediately: false)
     }
 
-    /// 配置变化或弹窗打开前立即刷新一次，避免展示旧值。
+    /// 配置变化或弹窗打开后刷新一次；只发布实际变化，避免强制重绘整棵弹窗视图。
     func refreshNow() {
-        update(force: true)
+        update(force: false)
     }
 
-    private func startTimer(interval: TimeInterval) {
+    private func startTimer(interval: TimeInterval, refreshImmediately: Bool) {
         timer?.invalidate()
         let newTimer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
             self?.update(force: false)
@@ -72,7 +72,9 @@ final class SalaryViewModel: ObservableObject {
         newTimer.tolerance = Self.timerTolerance(for: interval)
         RunLoop.main.add(newTimer, forMode: .common)
         timer = newTimer
-        update(force: true)
+        if refreshImmediately {
+            update(force: true)
+        }
     }
 
     private static func timerTolerance(for interval: TimeInterval) -> TimeInterval {

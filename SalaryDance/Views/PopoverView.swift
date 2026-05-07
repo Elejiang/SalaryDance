@@ -331,12 +331,33 @@ struct PopoverView: View {
         }
 
         let now = Date()
-        let week = offTaskWeekPeriod(containing: now)
-        let salaryCycle = config.salaryCyclePeriod(containing: now)
-        let weekSummary = offTaskTracker.summary(from: week.start, toExclusive: week.endExclusive, config: config, now: now)
-        let cycleSummary = offTaskTracker.summary(from: salaryCycle.start, toExclusive: salaryCycle.endExclusive, config: config, now: now)
-        let totalSummary = offTaskTracker.totalSummary(config: config, now: now)
         let cycleTitle = offTaskSettlementPeriodTitle(config)
+        var cachedWeekSummary: OffTaskAggregateSummary?
+        var cachedCycleSummary: OffTaskAggregateSummary?
+        var cachedTotalSummary: OffTaskAggregateSummary?
+
+        func weekSummary() -> OffTaskAggregateSummary {
+            if let cachedWeekSummary { return cachedWeekSummary }
+            let week = offTaskWeekPeriod(containing: now)
+            let summary = offTaskTracker.summary(from: week.start, toExclusive: week.endExclusive, config: config, now: now)
+            cachedWeekSummary = summary
+            return summary
+        }
+
+        func cycleSummary() -> OffTaskAggregateSummary {
+            if let cachedCycleSummary { return cachedCycleSummary }
+            let salaryCycle = config.salaryCyclePeriod(containing: now)
+            let summary = offTaskTracker.summary(from: salaryCycle.start, toExclusive: salaryCycle.endExclusive, config: config, now: now)
+            cachedCycleSummary = summary
+            return summary
+        }
+
+        func totalSummary() -> OffTaskAggregateSummary {
+            if let cachedTotalSummary { return cachedTotalSummary }
+            let summary = offTaskTracker.totalSummary(config: config, now: now)
+            cachedTotalSummary = summary
+            return summary
+        }
 
         var metrics: [SalaryMetricItem] = []
 
@@ -344,25 +365,25 @@ struct PopoverView: View {
             metrics.append(SalaryMetricItem(id: "offTaskTodaySalary", title: "本日摸鱼薪资", value: offTaskMoneyValue(today.amount)))
         }
         if config.popoverDisplaysWeekOffTaskSalary {
-            metrics.append(SalaryMetricItem(id: "offTaskWeekSalary", title: "本周摸鱼薪资", value: offTaskMoneyValue(weekSummary.amount)))
+            metrics.append(SalaryMetricItem(id: "offTaskWeekSalary", title: "本周摸鱼薪资", value: offTaskMoneyValue(weekSummary().amount)))
         }
         if config.popoverDisplaysSalaryCycleOffTaskSalary {
-            metrics.append(SalaryMetricItem(id: "offTaskCycleSalary", title: "\(cycleTitle)摸鱼薪资", value: offTaskMoneyValue(cycleSummary.amount)))
+            metrics.append(SalaryMetricItem(id: "offTaskCycleSalary", title: "\(cycleTitle)摸鱼薪资", value: offTaskMoneyValue(cycleSummary().amount)))
         }
         if config.popoverDisplaysHistoricalOffTaskSalary {
-            metrics.append(SalaryMetricItem(id: "offTaskTotalSalary", title: "历史摸鱼薪资", value: offTaskMoneyValue(totalSummary.amount)))
+            metrics.append(SalaryMetricItem(id: "offTaskTotalSalary", title: "历史摸鱼薪资", value: offTaskMoneyValue(totalSummary().amount)))
         }
         if config.popoverDisplaysTodayOffTaskDuration {
             metrics.append(SalaryMetricItem(id: "offTaskTodayDuration", title: "本日摸鱼时长", value: formatOffTaskDuration(today.paidSeconds), isSensitive: false))
         }
         if config.popoverDisplaysWeekOffTaskDuration {
-            metrics.append(SalaryMetricItem(id: "offTaskWeekDuration", title: "本周摸鱼时长", value: formatOffTaskDuration(weekSummary.paidSeconds), isSensitive: false))
+            metrics.append(SalaryMetricItem(id: "offTaskWeekDuration", title: "本周摸鱼时长", value: formatOffTaskDuration(weekSummary().paidSeconds), isSensitive: false))
         }
         if config.popoverDisplaysSalaryCycleOffTaskDuration {
-            metrics.append(SalaryMetricItem(id: "offTaskCycleDuration", title: "\(cycleTitle)摸鱼时长", value: formatOffTaskDuration(cycleSummary.paidSeconds), isSensitive: false))
+            metrics.append(SalaryMetricItem(id: "offTaskCycleDuration", title: "\(cycleTitle)摸鱼时长", value: formatOffTaskDuration(cycleSummary().paidSeconds), isSensitive: false))
         }
         if config.popoverDisplaysHistoricalOffTaskDuration {
-            metrics.append(SalaryMetricItem(id: "offTaskTotalDuration", title: "历史摸鱼时长", value: formatOffTaskDuration(totalSummary.paidSeconds), isSensitive: false))
+            metrics.append(SalaryMetricItem(id: "offTaskTotalDuration", title: "历史摸鱼时长", value: formatOffTaskDuration(totalSummary().paidSeconds), isSensitive: false))
         }
 
         return metrics

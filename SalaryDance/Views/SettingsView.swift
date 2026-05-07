@@ -105,7 +105,7 @@ private struct SubsidyStatusToggleStyle: ToggleStyle {
 private struct OffTaskHistoryYear: Identifiable {
     let id: String
     let title: String
-    let months: [OffTaskHistoryMonth]
+    let monthCount: Int
     let paidSeconds: TimeInterval
     let amount: Double
     let recordCount: Int
@@ -115,7 +115,7 @@ private struct OffTaskHistoryYear: Identifiable {
 private struct OffTaskHistoryMonth: Identifiable {
     let id: String
     let title: String
-    let days: [OffTaskHistoryDay]
+    let dayCount: Int
     let paidSeconds: TimeInterval
     let amount: Double
     let recordCount: Int
@@ -146,7 +146,7 @@ private struct WorkSessionDisplayPeriod: Identifiable {
 private struct WorkSessionHistoryYear: Identifiable {
     let id: String
     let title: String
-    let months: [WorkSessionHistoryMonth]
+    let monthCount: Int
     let seconds: TimeInterval
     let clockOutAmount: Double
     let overtimeAmount: Double
@@ -157,7 +157,7 @@ private struct WorkSessionHistoryYear: Identifiable {
 private struct WorkSessionHistoryMonth: Identifiable {
     let id: String
     let title: String
-    let days: [WorkSessionHistoryDay]
+    let dayCount: Int
     let seconds: TimeInterval
     let clockOutAmount: Double
     let overtimeAmount: Double
@@ -171,6 +171,98 @@ private struct WorkSessionHistoryDay: Identifiable {
     let seconds: TimeInterval
     let clockOutAmount: Double
     let overtimeAmount: Double
+}
+
+/// 展示页一次性创建的开关较多，使用 SwiftUI 轻量样式替代原生 Toggle 初始化。
+private struct SettingsSwitchToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button {
+            configuration.isOn.toggle()
+        } label: {
+            HStack(spacing: 10) {
+                configuration.label
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Spacer(minLength: 8)
+
+                ZStack(alignment: configuration.isOn ? .trailing : .leading) {
+                    Capsule()
+                        .fill(configuration.isOn ? Color.accentColor.opacity(0.88) : Color(nsColor: .separatorColor).opacity(0.42))
+
+                    Circle()
+                        .fill(Color(nsColor: .controlBackgroundColor))
+                        .shadow(color: .black.opacity(0.12), radius: 1, x: 0, y: 1)
+                        .padding(2)
+                }
+                .frame(width: 32, height: 18)
+                .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .accessibilityValue(configuration.isOn ? "开启" : "关闭")
+    }
+}
+
+/// 展示页共用一个系统色板，避免多个 ColorPicker 在切页时批量初始化。
+private final class SettingsColorPanelCoordinator: NSObject {
+    static let shared = SettingsColorPanelCoordinator()
+
+    private var onChange: ((String) -> Void)?
+    private var lastHex: String?
+
+    private override init() {
+        super.init()
+    }
+
+    func show(color: NSColor, onChange: @escaping (String) -> Void) {
+        lastHex = SalaryColor.hex(from: color)
+        self.onChange = onChange
+
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.isContinuous = true
+        panel.color = color
+        panel.setTarget(self)
+        panel.setAction(#selector(colorDidChange(_:)))
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func colorDidChange(_ sender: NSColorPanel) {
+        let hex = SalaryColor.hex(from: sender.color)
+        guard hex != lastHex else { return }
+        lastHex = hex
+        onChange?(hex)
+    }
+}
+
+private struct SettingsColorSwatchButton: View {
+    let title: String
+    let color: NSColor
+    let hex: String
+    let onChange: (String) -> Void
+
+    var body: some View {
+        Button {
+            SettingsColorPanelCoordinator.shared.show(color: color, onChange: onChange)
+        } label: {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color(nsColor: color))
+                .frame(width: 34, height: 22)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(Color(nsColor: .separatorColor).opacity(0.65), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.08), radius: 1, x: 0, y: 1)
+                .contentShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .accessibilityLabel(Text("\(title)：\(hex)"))
+        .help("选择\(title)")
+    }
 }
 
 private struct SecondPrecisionDateTimePicker: View {
@@ -620,19 +712,10 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// 所有页面常驻在 ZStack 中，只切换透明度和命中区域；展示页这种重页面因此不会每次点击重新构建。
+    /// 只构建当前栏目，避免切页时同时刷新弹窗预览和历史记录等重内容。
     @ViewBuilder
     private var settingsMainContent: some View {
-        // 设置窗口打开时预加载全部栏目，切换栏目只改可见性，减少“展示”页首次点击延迟。
-        ZStack(alignment: .topLeading) {
-            ForEach(SettingsCategory.allCases) { category in
-                settingsPage(category)
-                    .opacity(selectedCategory == category ? 1 : 0)
-                    .allowsHitTesting(selectedCategory == category)
-                    .accessibilityHidden(selectedCategory != category)
-                    .zIndex(selectedCategory == category ? 1 : 0)
-            }
-        }
+        settingsPage(selectedCategory)
     }
 
     /// 单个设置页统一放进 ScrollView，右侧预览和设置项可以一起滚动对照。
@@ -665,8 +748,7 @@ struct SettingsView: View {
         case .display:
             displaySettingsContent
         case .offTask:
-            offTaskStatsSection
-            workSessionStatsSection
+            recordsSettingsContent
         case .shortcut:
             shortcutSettingsSection
         case .calendar:
@@ -678,20 +760,27 @@ struct SettingsView: View {
         }
     }
 
+    /// 记录页包含两组历史统计，使用惰性布局避免切入页面时一次性构建全部折叠明细。
+    private var recordsSettingsContent: some View {
+        LazyVStack(alignment: .leading, spacing: 16) {
+            offTaskStatsSection
+            workSessionStatsSection
+        }
+    }
+
     /// 薪资设置包含基础薪资、补贴、月薪折算方式和六个薪资换算结果。
     private var salarySection: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
+            LazyVStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("薪资类型")
                         .frame(width: 80, alignment: .leading)
-                    Picker("", selection: $configManager.config.salaryType) {
-                        ForEach(SalaryType.allCases, id: \.self) { type in
-                            Text(type.title).tag(type)
-                        }
-                    }
-                    .labelsHidden()
-                    .focusable(false)
+                    settingsSegmentedControl(
+                        options: Array(SalaryType.allCases),
+                        selection: $configManager.config.salaryType,
+                        title: { $0.title }
+                    )
+                    .frame(width: 220)
                     Spacer()
                 }
 
@@ -750,18 +839,17 @@ struct SettingsView: View {
             HStack {
                 Text("计薪周期")
                     .frame(width: 80, alignment: .leading)
-                Picker("", selection: Binding(
-                    get: { configManager.config.resolvedSalaryCycleMode },
-                    set: { newValue in
-                        configManager.config.salaryCycleMode = newValue
-                        ensureSalaryCycleHolidayData()
-                    }
-                )) {
-                    ForEach(SalaryCycleMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
+                settingsSegmentedControl(
+                    options: Array(SalaryCycleMode.allCases),
+                    selection: Binding(
+                        get: { configManager.config.resolvedSalaryCycleMode },
+                        set: { newValue in
+                            configManager.config.salaryCycleMode = newValue
+                            ensureSalaryCycleHolidayData()
+                        }
+                    ),
+                    title: { $0.title }
+                )
                 .frame(width: 180)
                 Spacer()
             }
@@ -909,7 +997,7 @@ struct SettingsView: View {
 
     /// 补贴列表和薪资输入放在同一页，避免用户在日薪、月薪和实时收入之间来回推导。
     private var subsidyListSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        LazyVStack(alignment: .leading, spacing: 10) {
             Divider()
 
             HStack(alignment: .center, spacing: 8) {
@@ -945,7 +1033,7 @@ struct SettingsView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                VStack(spacing: 8) {
+                LazyVStack(spacing: 8) {
                     ForEach(configManager.config.subsidies) { subsidy in
                         subsidyRow(subsidy)
                     }
@@ -1028,13 +1116,11 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
                     .frame(width: 70, alignment: .leading)
 
-                Picker("", selection: monthlySubsidyApplicationBinding(for: subsidy.id)) {
-                    ForEach(MonthlySubsidyApplicationMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
+                settingsSegmentedControl(
+                    options: Array(MonthlySubsidyApplicationMode.allCases),
+                    selection: monthlySubsidyApplicationBinding(for: subsidy.id),
+                    title: { $0.title }
+                )
                 .frame(width: 220)
 
                 Spacer(minLength: 0)
@@ -1698,15 +1784,14 @@ struct SettingsView: View {
                     HStack {
                         Text("数字动画")
                             .frame(width: 70, alignment: .leading)
-                        Picker("", selection: Binding(
-                            get: { configManager.config.resolvedStatusBarSalaryAnimationStyle },
-                            set: { setConfigValue(\.statusBarSalaryAnimationStyle, to: $0) }
-                        )) {
-                            ForEach(StatusBarSalaryAnimationStyle.allCases) { style in
-                                Text(style.title).tag(style)
-                            }
-                        }
-                        .pickerStyle(.segmented)
+                        settingsSegmentedControl(
+                            options: Array(StatusBarSalaryAnimationStyle.allCases),
+                            selection: Binding(
+                                get: { configManager.config.resolvedStatusBarSalaryAnimationStyle },
+                                set: { configManager.config.statusBarSalaryAnimationStyle = $0 }
+                            ),
+                            title: { $0.title }
+                        )
                         .frame(maxWidth: 220)
                     }
                     .disabled(!configManager.config.displaysEarningsInStatusBar)
@@ -1714,11 +1799,13 @@ struct SettingsView: View {
                     HStack {
                         Text("金额颜色")
                             .frame(width: 70, alignment: .leading)
-                        ColorPicker("", selection: statusBarSalaryColorBinding, supportsOpacity: false)
-                            .labelsHidden()
-                        Text(configManager.config.resolvedStatusBarSalaryColorHex)
-                            .font(.caption.monospaced())
-                            .foregroundColor(.secondary)
+                        settingsColorControl(
+                            title: "金额颜色",
+                            color: configManager.config.statusBarSalaryNSColor,
+                            hex: configManager.config.resolvedStatusBarSalaryColorHex
+                        ) { hex in
+                            configManager.config.statusBarSalaryColorHex = hex
+                        }
                         Button("默认") {
                             configManager.config.statusBarSalaryColorHex = nil
                         }
@@ -1736,15 +1823,14 @@ struct SettingsView: View {
                     HStack {
                         Text("小数位")
                             .frame(width: 70, alignment: .leading)
-                        Picker("", selection: Binding(
-                            get: { configManager.config.displayDecimalPlaces },
-                            set: { setConfigValue(\.moneyDecimalPlaces, to: $0) }
-                        )) {
-                            ForEach(0...3, id: \.self) { digits in
-                                Text("\(digits)").tag(digits)
-                            }
-                        }
-                        .pickerStyle(.segmented)
+                        settingsSegmentedControl(
+                            options: Array(0...3),
+                            selection: Binding(
+                                get: { configManager.config.displayDecimalPlaces },
+                                set: { configManager.config.moneyDecimalPlaces = $0 }
+                            ),
+                            title: { "\($0)" }
+                        )
                         .frame(width: 140)
                         Spacer(minLength: 0)
                     }
@@ -1778,6 +1864,7 @@ struct SettingsView: View {
                 displayPreviewStickyColumn
             }
         }
+        .toggleStyle(SettingsSwitchToggleStyle())
     }
 
     /// 右侧预览直接复用真实弹窗组件，避免设置页和实际弹窗出现两套展示逻辑。
@@ -1998,11 +2085,13 @@ struct SettingsView: View {
                 HStack {
                     Text("薪资颜色")
                         .frame(width: 80, alignment: .leading)
-                    ColorPicker("", selection: popoverSalaryColorBinding, supportsOpacity: false)
-                        .labelsHidden()
-                    Text(configManager.config.resolvedPopoverSalaryColorHex)
-                        .font(.caption.monospaced())
-                        .foregroundColor(.secondary)
+                    settingsColorControl(
+                        title: "薪资颜色",
+                        color: configManager.config.popoverSalaryNSColor,
+                        hex: configManager.config.resolvedPopoverSalaryColorHex
+                    ) { hex in
+                        configManager.config.popoverSalaryColorHex = hex
+                    }
                     Spacer()
                 }
             }
@@ -2020,11 +2109,13 @@ struct SettingsView: View {
                 HStack {
                     Text("时间轴颜色")
                         .frame(width: 80, alignment: .leading)
-                    ColorPicker("", selection: workProgressColorBinding, supportsOpacity: false)
-                        .labelsHidden()
-                    Text(configManager.config.resolvedWorkProgressColorHex)
-                        .font(.caption.monospaced())
-                        .foregroundColor(.secondary)
+                    settingsColorControl(
+                        title: "时间轴颜色",
+                        color: configManager.config.workProgressNSColor,
+                        hex: configManager.config.resolvedWorkProgressColorHex
+                    ) { hex in
+                        configManager.config.workProgressColorHex = hex
+                    }
                     Spacer()
                 }
 
@@ -2060,15 +2151,14 @@ struct SettingsView: View {
                 HStack {
                     Text("进度小数位")
                         .frame(width: 80, alignment: .leading)
-                    Picker("", selection: Binding(
-                        get: { configManager.config.workProgressDisplayDecimalPlaces },
-                        set: { setConfigValue(\.workProgressDecimalPlaces, to: $0) }
-                    )) {
-                        ForEach(SalaryConfig.workProgressDecimalPlacesRange, id: \.self) { digits in
-                            Text("\(digits)").tag(digits)
-                        }
-                    }
-                    .pickerStyle(.segmented)
+                    settingsSegmentedControl(
+                        options: Array(SalaryConfig.workProgressDecimalPlacesRange),
+                        selection: Binding(
+                            get: { configManager.config.workProgressDisplayDecimalPlaces },
+                            set: { configManager.config.workProgressDecimalPlaces = $0 }
+                        ),
+                        title: { "\($0)" }
+                    )
                     .frame(width: 140)
                     Spacer()
                 }
@@ -2083,12 +2173,14 @@ struct SettingsView: View {
                 HStack {
                     Text("午休颜色")
                         .frame(width: 80, alignment: .leading)
-                    ColorPicker("", selection: lunchBreakColorBinding, supportsOpacity: false)
-                        .labelsHidden()
+                    settingsColorControl(
+                        title: "午休颜色",
+                        color: configManager.config.lunchBreakNSColor,
+                        hex: configManager.config.resolvedLunchBreakColorHex
+                    ) { hex in
+                        configManager.config.lunchBreakColorHex = hex
+                    }
                         .disabled(!configManager.config.displaysLunchBreakColor)
-                    Text(configManager.config.resolvedLunchBreakColorHex)
-                        .font(.caption.monospaced())
-                        .foregroundColor(.secondary)
                     Spacer()
                 }
 
@@ -2100,12 +2192,14 @@ struct SettingsView: View {
                 HStack {
                     Text("晚饭颜色")
                         .frame(width: 80, alignment: .leading)
-                    ColorPicker("", selection: dinnerBreakColorBinding, supportsOpacity: false)
-                        .labelsHidden()
+                    settingsColorControl(
+                        title: "晚饭颜色",
+                        color: configManager.config.dinnerBreakNSColor,
+                        hex: configManager.config.resolvedDinnerBreakColorHex
+                    ) { hex in
+                        configManager.config.dinnerBreakColorHex = hex
+                    }
                         .disabled(!configManager.config.displaysDinnerBreakColor)
-                    Text(configManager.config.resolvedDinnerBreakColorHex)
-                        .font(.caption.monospaced())
-                        .foregroundColor(.secondary)
                     Spacer()
                 }
 
@@ -2125,15 +2219,13 @@ struct SettingsView: View {
     private var workSessionStatsSection: some View {
         let config = configManager.config
         let today = workSessionTracker.currentSummary(config: config)
-        let total = workSessionTracker.totalSummary(config: config)
         let displayPeriods = workSessionDisplayPeriods(config: config, today: today)
-        let historyYears = workSessionHistoryYears(config: config)
         let clockOutAvailability = workSessionTracker.clockOutAvailability(config: config)
         let overtimeAvailability = workSessionTracker.overtimeAvailability(config: config)
         let hasClockOut = workSessionTracker.clockOutSession(for: today.workday) != nil
         let hasOvertime = workSessionTracker.latestOvertimeSession(for: today.workday) != nil
 
-        return VStack(alignment: .leading, spacing: 16) {
+        return LazyVStack(alignment: .leading, spacing: 16) {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .center, spacing: 12) {
@@ -2203,47 +2295,55 @@ struct SettingsView: View {
                     .font(.headline)
             }
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
-                        workSessionStatCard(title: "历史提前下班进账", value: formatMoney(total.clockOutAmount), tint: .green)
-                        workSessionStatCard(title: "历史提前下班时长", value: formatOffTaskDuration(total.clockOutSeconds), tint: .green)
-                        workSessionStatCard(title: "历史加班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
-                        workSessionStatCard(title: "历史加班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
-                    }
+            workSessionHistorySummarySection(config: config)
+        }
+    }
 
-                    Divider()
+    private func workSessionHistorySummarySection(config: SalaryConfig) -> some View {
+        let total = workSessionTracker.totalSummary(config: config)
+        let summaries = workSessionTracker.recordSummaries(config: config)
+        let historyYears = workSessionHistoryYears(from: summaries)
 
-                    HStack(spacing: 8) {
-                        Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.secondary)
+        return GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                    workSessionStatCard(title: "历史提前下班进账", value: formatMoney(total.clockOutAmount), tint: .green)
+                    workSessionStatCard(title: "历史提前下班时长", value: formatOffTaskDuration(total.clockOutSeconds), tint: .green)
+                    workSessionStatCard(title: "历史加班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
+                    workSessionStatCard(title: "历史加班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
+                }
 
-                        Spacer()
+                Divider()
 
-                        offTaskHistoryPill("提前下班 \(total.clockOutCount)次")
-                        offTaskHistoryPill("加班 \(total.overtimeCount)次")
-                        offTaskHistoryPill("\(historyYears.reduce(0) { $0 + $1.dayCount })天")
-                    }
+                HStack(spacing: 8) {
+                    Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
 
-                    if historyYears.isEmpty {
-                        Text("暂无提前下班或加班记录")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(historyYears) { year in
-                                workSessionHistoryYearDisclosure(year, config: config)
-                            }
+                    Spacer()
+
+                    offTaskHistoryPill("提前下班 \(total.clockOutCount)次")
+                    offTaskHistoryPill("加班 \(total.overtimeCount)次")
+                    offTaskHistoryPill("\(historyYears.reduce(0) { $0 + $1.dayCount })天")
+                }
+
+                if historyYears.isEmpty {
+                    Text("暂无提前下班或加班记录")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(historyYears) { year in
+                            workSessionHistoryYearDisclosure(year, summaries: summaries)
                         }
                     }
                 }
-                .padding(12)
-            } label: {
-                Label("提前下班 / 加班历史记录", systemImage: "tray.full")
-                    .font(.headline)
             }
+            .padding(12)
+        } label: {
+            Label("提前下班 / 加班历史记录", systemImage: "tray.full")
+                .font(.headline)
         }
     }
 
@@ -2340,8 +2440,7 @@ struct SettingsView: View {
     }
 
     /// 提前下班与加班历史同样按年、月、日折叠，避免累计数据和明细割裂。
-    private func workSessionHistoryYears(config: SalaryConfig) -> [WorkSessionHistoryYear] {
-        let summaries = workSessionTracker.recordSummaries(config: config)
+    private func workSessionHistoryYears(from summaries: [WorkSessionRecordSummary]) -> [WorkSessionHistoryYear] {
         let grouped = Dictionary(grouping: summaries) { summary in
             offTaskYearKey(summary.workday)
         }
@@ -2350,17 +2449,16 @@ struct SettingsView: View {
             guard let records = grouped[key] else {
                 return nil
             }
-            let months = workSessionHistoryMonths(from: records)
 
             return WorkSessionHistoryYear(
                 id: key,
                 title: formatOffTaskYear(records.first?.workday ?? Date()),
-                months: months,
+                monthCount: Set(records.map { offTaskMonthKey($0.workday) }).count,
                 seconds: records.reduce(0) { $0 + $1.seconds },
                 clockOutAmount: records.filter { $0.kind == .clockOut }.reduce(0) { $0 + $1.amount },
                 overtimeAmount: records.filter { $0.kind == .overtime }.reduce(0) { $0 + $1.amount },
                 recordCount: records.count,
-                dayCount: months.reduce(0) { $0 + $1.days.count }
+                dayCount: Set(records.map { offTaskDayKey($0.workday) }).count
             )
         }
     }
@@ -2374,12 +2472,11 @@ struct SettingsView: View {
             guard let records = grouped[key] else {
                 return nil
             }
-            let days = workSessionHistoryDays(from: records)
 
             return WorkSessionHistoryMonth(
                 id: key,
                 title: formatOffTaskMonth(records.first?.workday ?? Date()),
-                days: days,
+                dayCount: Set(records.map { offTaskDayKey($0.workday) }).count,
                 seconds: records.reduce(0) { $0 + $1.seconds },
                 clockOutAmount: records.filter { $0.kind == .clockOut }.reduce(0) { $0 + $1.amount },
                 overtimeAmount: records.filter { $0.kind == .overtime }.reduce(0) { $0 + $1.amount },
@@ -2411,7 +2508,7 @@ struct SettingsView: View {
         }
     }
 
-    private func workSessionHistoryYearDisclosure(_ year: WorkSessionHistoryYear, config: SalaryConfig) -> some View {
+    private func workSessionHistoryYearDisclosure(_ year: WorkSessionHistoryYear, summaries: [WorkSessionRecordSummary]) -> some View {
         let isExpanded = expandedWorkSessionHistoryYears.contains(year.id)
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -2421,7 +2518,7 @@ struct SettingsView: View {
                 workSessionHistoryGroupLabel(
                     icon: "calendar",
                     title: year.title,
-                    detail: "共计\(year.months.count)月 | \(year.dayCount)天",
+                    detail: "共计\(year.monthCount)月 | \(year.dayCount)天",
                     recordCount: year.recordCount,
                     seconds: year.seconds,
                     clockOutAmount: year.clockOutAmount,
@@ -2430,9 +2527,13 @@ struct SettingsView: View {
             }
 
             if isExpanded {
+                let yearSummaries = summaries.filter { summary in
+                    offTaskYearKey(summary.workday) == year.id
+                }
+                let months = workSessionHistoryMonths(from: yearSummaries)
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(year.months) { month in
-                        workSessionHistoryMonthDisclosure(month, config: config)
+                    ForEach(months) { month in
+                        workSessionHistoryMonthDisclosure(month, summaries: yearSummaries)
                     }
                 }
                 .padding(.top, 8)
@@ -2450,7 +2551,7 @@ struct SettingsView: View {
         )
     }
 
-    private func workSessionHistoryMonthDisclosure(_ month: WorkSessionHistoryMonth, config: SalaryConfig) -> some View {
+    private func workSessionHistoryMonthDisclosure(_ month: WorkSessionHistoryMonth, summaries: [WorkSessionRecordSummary]) -> some View {
         let isExpanded = expandedWorkSessionHistoryMonths.contains(month.id)
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -2460,7 +2561,7 @@ struct SettingsView: View {
                 workSessionHistoryGroupLabel(
                     icon: "calendar.circle",
                     title: month.title,
-                    detail: "共计\(month.days.count)天",
+                    detail: "共计\(month.dayCount)天",
                     recordCount: month.recordCount,
                     seconds: month.seconds,
                     clockOutAmount: month.clockOutAmount,
@@ -2469,9 +2570,13 @@ struct SettingsView: View {
             }
 
             if isExpanded {
+                let monthSummaries = summaries.filter { summary in
+                    offTaskMonthKey(summary.workday) == month.id
+                }
+                let days = workSessionHistoryDays(from: monthSummaries)
                 VStack(alignment: .leading, spacing: 7) {
-                    ForEach(month.days) { day in
-                        workSessionHistoryDayDisclosure(day, config: config)
+                    ForEach(days) { day in
+                        workSessionHistoryDayDisclosure(day)
                     }
                 }
                 .padding(.top, 8)
@@ -2489,7 +2594,7 @@ struct SettingsView: View {
         )
     }
 
-    private func workSessionHistoryDayDisclosure(_ day: WorkSessionHistoryDay, config: SalaryConfig) -> some View {
+    private func workSessionHistoryDayDisclosure(_ day: WorkSessionHistoryDay) -> some View {
         let isExpanded = expandedWorkSessionHistoryDays.contains(day.id)
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -2655,13 +2760,11 @@ struct SettingsView: View {
     private var offTaskStatsSection: some View {
         let config = configManager.config
         let today = offTaskTracker.currentSummary(config: config)
-        let total = offTaskTracker.totalSummary(config: config)
         let displayPeriods = offTaskDisplayPeriods(config: config, today: today)
-        let historyYears = offTaskHistoryYears(config: config)
         let startAvailability = offTaskTracker.startAvailability(config: config)
         let statusDetail = offTaskStatusDetail(today)
 
-        return VStack(alignment: .leading, spacing: 16) {
+        return LazyVStack(alignment: .leading, spacing: 16) {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .center, spacing: 12) {
@@ -2715,46 +2818,54 @@ struct SettingsView: View {
                     .font(.headline)
             }
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
-                        offTaskStatCard(title: "历史摸鱼薪资", value: formatMoney(total.amount))
-                        offTaskStatCard(title: "历史摸鱼时长", value: formatOffTaskDuration(total.paidSeconds))
-                        offTaskStatCard(title: "历史摸鱼次数", value: "\(total.sessionCount)")
-                        offTaskStatCard(title: "历史摸鱼天数", value: "\(total.dayCount)")
-                    }
+            offTaskHistorySummarySection(config: config)
+        }
+    }
 
-                    Divider()
+    private func offTaskHistorySummarySection(config: SalaryConfig) -> some View {
+        let total = offTaskTracker.totalSummary(config: config)
+        let summaries = offTaskTracker.sessionSummaries(config: config)
+        let historyYears = offTaskHistoryYears(from: summaries)
 
-                    HStack(spacing: 8) {
-                        Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(.secondary)
+        return GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                    offTaskStatCard(title: "历史摸鱼薪资", value: formatMoney(total.amount))
+                    offTaskStatCard(title: "历史摸鱼时长", value: formatOffTaskDuration(total.paidSeconds))
+                    offTaskStatCard(title: "历史摸鱼次数", value: "\(total.sessionCount)")
+                    offTaskStatCard(title: "历史摸鱼天数", value: "\(total.dayCount)")
+                }
 
-                        Spacer()
+                Divider()
 
-                        offTaskHistoryPill("\(total.sessionCount)次")
-                        offTaskHistoryPill("\(total.dayCount)天")
-                    }
+                HStack(spacing: 8) {
+                    Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(.secondary)
 
-                    if historyYears.isEmpty {
-                        Text("暂无摸鱼记录")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(historyYears) { year in
-                                offTaskHistoryYearDisclosure(year, config: config)
-                            }
+                    Spacer()
+
+                    offTaskHistoryPill("\(total.sessionCount)次")
+                    offTaskHistoryPill("\(total.dayCount)天")
+                }
+
+                if historyYears.isEmpty {
+                    Text("暂无摸鱼记录")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(historyYears) { year in
+                            offTaskHistoryYearDisclosure(year, summaries: summaries, config: config)
                         }
                     }
                 }
-                .padding(12)
-            } label: {
-                Label("历史记录", systemImage: "tray.full")
-                    .font(.headline)
             }
+            .padding(12)
+        } label: {
+            Label("历史记录", systemImage: "tray.full")
+                .font(.headline)
         }
     }
 
@@ -2845,8 +2956,7 @@ struct SettingsView: View {
     }
 
     /// 历史记录按年、月、日逐级折叠，避免记录增多后单层列表过长。
-    private func offTaskHistoryYears(config: SalaryConfig) -> [OffTaskHistoryYear] {
-        let summaries = offTaskTracker.sessionSummaries(config: config)
+    private func offTaskHistoryYears(from summaries: [OffTaskSessionSummary]) -> [OffTaskHistoryYear] {
         let grouped = Dictionary(grouping: summaries) { summary in
             offTaskYearKey(summary.workday)
         }
@@ -2855,16 +2965,15 @@ struct SettingsView: View {
             guard let records = grouped[key] else {
                 return nil
             }
-            let months = offTaskHistoryMonths(from: records)
 
             return OffTaskHistoryYear(
                 id: key,
                 title: formatOffTaskYear(records.first?.workday ?? Date()),
-                months: months,
+                monthCount: Set(records.map { offTaskMonthKey($0.workday) }).count,
                 paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
                 amount: records.reduce(0) { $0 + $1.amount },
                 recordCount: records.count,
-                dayCount: months.reduce(0) { $0 + $1.days.count }
+                dayCount: Set(records.map { offTaskDayKey($0.workday) }).count
             )
         }
     }
@@ -2878,12 +2987,11 @@ struct SettingsView: View {
             guard let records = grouped[key] else {
                 return nil
             }
-            let days = offTaskHistoryDays(from: records)
 
             return OffTaskHistoryMonth(
                 id: key,
                 title: formatOffTaskMonth(records.first?.workday ?? Date()),
-                days: days,
+                dayCount: Set(records.map { offTaskDayKey($0.workday) }).count,
                 paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
                 amount: records.reduce(0) { $0 + $1.amount },
                 recordCount: records.count
@@ -2913,7 +3021,7 @@ struct SettingsView: View {
         }
     }
 
-    private func offTaskHistoryYearDisclosure(_ year: OffTaskHistoryYear, config: SalaryConfig) -> some View {
+    private func offTaskHistoryYearDisclosure(_ year: OffTaskHistoryYear, summaries: [OffTaskSessionSummary], config: SalaryConfig) -> some View {
         let isExpanded = expandedOffTaskHistoryYears.contains(year.id)
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -2923,7 +3031,7 @@ struct SettingsView: View {
                 offTaskHistoryGroupLabel(
                     icon: "calendar",
                     title: year.title,
-                    detail: "共计摸鱼\(year.months.count)月 | \(year.dayCount)天",
+                    detail: "共计摸鱼\(year.monthCount)月 | \(year.dayCount)天",
                     recordCount: year.recordCount,
                     paidSeconds: year.paidSeconds,
                     amount: year.amount
@@ -2931,9 +3039,13 @@ struct SettingsView: View {
             }
 
             if isExpanded {
+                let yearSummaries = summaries.filter { summary in
+                    offTaskYearKey(summary.workday) == year.id
+                }
+                let months = offTaskHistoryMonths(from: yearSummaries)
                 VStack(alignment: .leading, spacing: 8) {
-                    ForEach(year.months) { month in
-                        offTaskHistoryMonthDisclosure(month, config: config)
+                    ForEach(months) { month in
+                        offTaskHistoryMonthDisclosure(month, summaries: yearSummaries, config: config)
                     }
                 }
                 .padding(.top, 8)
@@ -2951,7 +3063,7 @@ struct SettingsView: View {
         )
     }
 
-    private func offTaskHistoryMonthDisclosure(_ month: OffTaskHistoryMonth, config: SalaryConfig) -> some View {
+    private func offTaskHistoryMonthDisclosure(_ month: OffTaskHistoryMonth, summaries: [OffTaskSessionSummary], config: SalaryConfig) -> some View {
         let isExpanded = expandedOffTaskHistoryMonths.contains(month.id)
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -2961,7 +3073,7 @@ struct SettingsView: View {
                 offTaskHistoryGroupLabel(
                     icon: "calendar.circle",
                     title: month.title,
-                    detail: "共计摸鱼\(month.days.count)天",
+                    detail: "共计摸鱼\(month.dayCount)天",
                     recordCount: month.recordCount,
                     paidSeconds: month.paidSeconds,
                     amount: month.amount
@@ -2969,8 +3081,12 @@ struct SettingsView: View {
             }
 
             if isExpanded {
+                let monthSummaries = summaries.filter { summary in
+                    offTaskMonthKey(summary.workday) == month.id
+                }
+                let days = offTaskHistoryDays(from: monthSummaries)
                 VStack(alignment: .leading, spacing: 7) {
-                    ForEach(month.days) { day in
+                    ForEach(days) { day in
                         offTaskHistoryDayDisclosure(day, config: config)
                     }
                 }
@@ -3797,14 +3913,6 @@ struct SettingsView: View {
         TimeInputView(hour: hour, minute: minute)
     }
 
-    /// Segmented Picker 可能在 SwiftUI 的视图更新栈里回写 selection；延后一拍写配置可避免 @Published 同步发布警告。
-    private func setConfigValue<Value: Equatable>(_ keyPath: WritableKeyPath<SalaryConfig, Value>, to value: Value) {
-        DispatchQueue.main.async {
-            guard configManager.config[keyPath: keyPath] != value else { return }
-            configManager.config[keyPath: keyPath] = value
-        }
-    }
-
     private var subsidyExplanation: String {
         let config = configManager.config
         let base = """
@@ -3987,40 +4095,53 @@ struct SettingsView: View {
         }
     }
 
-    /// 下面这些颜色 Binding 负责在 SwiftUI Color 和配置中的 hex 字符串之间转换。
-    private var lunchBreakColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                Color(nsColor: configManager.config.lunchBreakNSColor)
-            },
-            set: { newColor in
-                configManager.config.lunchBreakColorHex = SalaryColor.hex(from: NSColor(newColor))
+    private func settingsColorControl(title: String, color: NSColor, hex: String, onChange: @escaping (String) -> Void) -> some View {
+        HStack(spacing: 8) {
+            SettingsColorSwatchButton(title: title, color: color, hex: hex, onChange: onChange)
+            Text(hex)
+                .font(.caption.monospaced())
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func settingsSegmentedControl<Option: Hashable>(
+        options: [Option],
+        selection: Binding<Option>,
+        title: @escaping (Option) -> String
+    ) -> some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.self) { option in
+                let isSelected = selection.wrappedValue == option
+                Button {
+                    selection.wrappedValue = option
+                } label: {
+                    Text(title(option))
+                        .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium, design: .rounded))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.86)
+                        .frame(maxWidth: .infinity, minHeight: 26)
+                        .foregroundColor(isSelected ? .accentColor : .primary)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7)
+                                .fill(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+                        )
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
             }
+        }
+        .padding(3)
+        .background(
+            RoundedRectangle(cornerRadius: 9)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.78))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 9)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.42), lineWidth: 1)
         )
     }
 
-    private var workProgressColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                Color(nsColor: configManager.config.workProgressNSColor)
-            },
-            set: { newColor in
-                configManager.config.workProgressColorHex = SalaryColor.hex(from: NSColor(newColor))
-            }
-        )
-    }
-
-    private var dinnerBreakColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                Color(nsColor: configManager.config.dinnerBreakNSColor)
-            },
-            set: { newColor in
-                configManager.config.dinnerBreakColorHex = SalaryColor.hex(from: NSColor(newColor))
-            }
-        )
-    }
-
+    /// 日历页仍使用系统 ColorPicker；展示页改用共享色板，避免切页时初始化多个原生色板控件。
     private var holidayPastColorBinding: Binding<Color> {
         Binding(
             get: {
@@ -4039,28 +4160,6 @@ struct SettingsView: View {
             },
             set: { newColor in
                 configManager.config.holidayFutureColorHex = SalaryColor.hex(from: NSColor(newColor))
-            }
-        )
-    }
-
-    private var popoverSalaryColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                Color(nsColor: configManager.config.popoverSalaryNSColor)
-            },
-            set: { newColor in
-                configManager.config.popoverSalaryColorHex = SalaryColor.hex(from: NSColor(newColor))
-            }
-        )
-    }
-
-    private var statusBarSalaryColorBinding: Binding<Color> {
-        Binding(
-            get: {
-                Color(nsColor: configManager.config.statusBarSalaryNSColor)
-            },
-            set: { newColor in
-                configManager.config.statusBarSalaryColorHex = SalaryColor.hex(from: NSColor(newColor))
             }
         )
     }
