@@ -11,6 +11,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
 
     private let viewModel = SalaryViewModel()
     private let offTaskTracker = OffTaskTracker.shared
+    private let workSessionTracker = WorkSessionTracker.shared
     private let popover = NSPopover()
     private let statusItemModel = StatusBarItemModel()
     private lazy var statusItemHostingView = NSHostingView(rootView: StatusBarItemContent(model: statusItemModel))
@@ -68,6 +69,26 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             .store(in: &cancellables)
 
         offTaskTracker.$sessions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.viewModel.refreshNow()
+                self?.updateStatusItemTitle()
+                self?.updateRefreshCadence()
+                self?.updatePopoverContentSize()
+            }
+            .store(in: &cancellables)
+
+        workSessionTracker.$clockOutSessions
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.viewModel.refreshNow()
+                self?.updateStatusItemTitle()
+                self?.updateRefreshCadence()
+                self?.updatePopoverContentSize()
+            }
+            .store(in: &cancellables)
+
+        workSessionTracker.$overtimeSessions
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.viewModel.refreshNow()
@@ -579,7 +600,10 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
     /// 按当前展示状态调整刷新频率，实时展示时高频，后台空闲时可降频。
     private func updateRefreshCadence() {
         let config = SalaryConfigManager.shared.config
-        let needsLiveUpdates = popover.isShown || config.displaysEarningsInStatusBar || offTaskTracker.isActive
+        let needsLiveUpdates = popover.isShown
+            || config.displaysEarningsInStatusBar
+            || offTaskTracker.isActive
+            || workSessionTracker.isOvertimeActive
         // 没有实时展示时降到低频刷新；如果用户本来设置得更慢，则尊重更慢的配置。
         let interval: TimeInterval = needsLiveUpdates || !config.usesLowFrequencyUpdatesWhenIdle
             ? config.resolvedRefreshIntervalSeconds
@@ -616,6 +640,8 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             || config.popoverDisplaysAnySalaryRate
             || config.popoverDisplaysWorkProgress
         let showsOffTaskPanel = config.popoverDisplaysAnyOffTaskInformation
+        let showsWorkSessionPanel = config.popoverDisplaysAnyWorkSessionInformation
+            && workSessionTracker.shouldShowPopoverPanel(config: config)
 
         var height: CGFloat = 24
         var outerSections = 0
@@ -656,6 +682,24 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             height += salaryHeight
         }
 
+        if showsWorkSessionPanel {
+            outerSections += 1
+            var workSessionHeight: CGFloat = 16
+            if config.popoverDisplaysWorkSessionStatus {
+                workSessionHeight += 28
+            }
+            if config.popoverDisplaysClockOutAction || config.popoverDisplaysOvertimeAction {
+                workSessionHeight += 30
+            }
+            if config.popoverDisplaysOvertimeAction {
+                workSessionHeight += 48
+            }
+            if config.popoverDisplaysTodayWorkSessionSummary {
+                workSessionHeight += 30
+            }
+            height += workSessionHeight
+        }
+
         if showsOffTaskPanel {
             outerSections += 1
             var offTaskHeight: CGFloat = 16
@@ -683,7 +727,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             height += offTaskHeight
         }
 
-        if (showsSalaryBlock || showsOffTaskPanel) && config.popoverDisplaysQuote {
+        if (showsSalaryBlock || showsOffTaskPanel || showsWorkSessionPanel) && config.popoverDisplaysQuote {
             outerSections += 1
             height += 1
         }

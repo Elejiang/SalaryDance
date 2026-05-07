@@ -53,6 +53,18 @@ enum SalaryWorkTimeline {
         return nil
     }
 
+    static func latestFinishedWindow(endingAtOrBefore date: Date, config: SalaryConfig, calendar: Calendar = .current) -> SalaryWorkWindow? {
+        let today = calendar.startOfDay(for: date)
+        let candidateDays = (-2...0).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: today)
+        }
+
+        return candidateDays
+            .compactMap { workWindow(startingOn: $0, config: config, calendar: calendar) }
+            .filter { date >= $0.end }
+            .max { $0.end < $1.end }
+    }
+
     static func paidInterval(containing date: Date, in window: SalaryWorkWindow, config: SalaryConfig, calendar: Calendar = .current) -> DateInterval? {
         paidIntervals(in: window, config: config, calendar: calendar).first { interval in
             date >= interval.start && date < interval.end

@@ -6,6 +6,8 @@ enum WorkStatus: Equatable {
     case notStarted
     case working
     case onBreak(breakName: String)
+    case clockedOutEarly
+    case overtime
     case finished
     case dayOff
 }
@@ -25,6 +27,7 @@ final class SalaryViewModel: ObservableObject {
     private var updateInterval: TimeInterval = 1
     private let configManager = SalaryConfigManager.shared
     private let offTaskTracker = OffTaskTracker.shared
+    private let workSessionTracker = WorkSessionTracker.shared
 
     var config: SalaryConfig {
         configManager.config
@@ -168,6 +171,10 @@ final class SalaryViewModel: ObservableObject {
             }
         }
 
+        if let overtimeSnapshot = activeOvertimeSnapshot(now: now, config: cfg, calendar: calendar) {
+            return overtimeSnapshot
+        }
+
         guard let todayWindow = makeWorkWindow(startingOn: today, calendar: calendar, config: cfg) else {
             return Snapshot(
                 todayEarnings: 0,
@@ -198,22 +205,27 @@ final class SalaryViewModel: ObservableObject {
         }
 
         if now >= todayWindow.end {
-            return Snapshot(
-                todayEarnings: todayWindow.dailySalary,
-                status: .finished,
-                statusText: "今日已收工",
-                earningsPerSecond: todayWindow.salaryPerSecond,
-                progress: 1.0,
-                effectiveDailySalary: todayWindow.dailySalary,
-                effectiveWorkTime: todayWindow.workTime,
-                effectivePaidWorkMinutes: todayWindow.paidWorkMinutes
-            )
+            return finishedSnapshot(now: now, window: todayWindow, config: cfg)
         }
 
         return activeSnapshot(now: now, window: todayWindow, config: cfg)
     }
 
     private func activeSnapshot(now: Date, window: WorkWindow, config cfg: SalaryConfig) -> Snapshot {
+        if let clockOut = workSessionTracker.clockOutSession(for: window.start, calendar: .current),
+           now >= clockOut.start {
+            return Snapshot(
+                todayEarnings: window.dailySalary,
+                status: .clockedOutEarly,
+                statusText: "提前 \(formatClock(clockOut.start)) 下班",
+                earningsPerSecond: window.salaryPerSecond,
+                progress: 1.0,
+                effectiveDailySalary: window.dailySalary,
+                effectiveWorkTime: window.workTime,
+                effectivePaidWorkMinutes: window.paidWorkMinutes
+            )
+        }
+
         let earnings = calculateEarningsUpToNow(now: now, window: window, config: cfg)
         let progress = timeProgress(now: now, window: window)
 
@@ -240,6 +252,46 @@ final class SalaryViewModel: ObservableObject {
             statusText: h > 0 ? "距下班 \(h)时\(m)分" : "距下班 \(m)分钟",
             earningsPerSecond: window.salaryPerSecond,
             progress: progress,
+            effectiveDailySalary: window.dailySalary,
+            effectiveWorkTime: window.workTime,
+            effectivePaidWorkMinutes: window.paidWorkMinutes
+        )
+    }
+
+    private func activeOvertimeSnapshot(now: Date, config cfg: SalaryConfig, calendar: Calendar) -> Snapshot? {
+        guard SalaryWorkTimeline.activeWindow(containing: now, config: cfg, calendar: calendar) == nil,
+              let activeOvertime = workSessionTracker.activeOvertimeSession(now: now, config: cfg, calendar: calendar),
+              let window = makeWorkWindow(startingOn: activeOvertime.workday, calendar: calendar, config: cfg),
+              now >= window.end else {
+            return nil
+        }
+
+        return finishedSnapshot(now: now, window: window, config: cfg)
+    }
+
+    private func finishedSnapshot(now: Date, window: WorkWindow, config cfg: SalaryConfig) -> Snapshot {
+        let activeOvertime = workSessionTracker.activeOvertimeSession(now: now, config: cfg)
+        let status: WorkStatus
+        let statusText: String
+
+        if let overtime = activeOvertime,
+           Calendar.current.isDate(overtime.workday, inSameDayAs: window.start) {
+            status = .overtime
+            statusText = overtimeStatusText(now: now, overtime: overtime)
+        } else if workSessionTracker.clockOutSession(for: window.start) != nil {
+            status = .clockedOutEarly
+            statusText = "已提前下班"
+        } else {
+            status = .finished
+            statusText = "今日已收工"
+        }
+
+        return Snapshot(
+            todayEarnings: window.dailySalary,
+            status: status,
+            statusText: statusText,
+            earningsPerSecond: window.salaryPerSecond,
+            progress: 1.0,
             effectiveDailySalary: window.dailySalary,
             effectiveWorkTime: window.workTime,
             effectivePaidWorkMinutes: window.paidWorkMinutes
@@ -315,6 +367,23 @@ final class SalaryViewModel: ObservableObject {
         let duration = window.end.timeIntervalSince(window.start)
         guard duration > 0 else { return 0 }
         return min(1.0, max(0, now.timeIntervalSince(window.start) / duration))
+    }
+
+    private func overtimeStatusText(now: Date, overtime: OvertimeSession) -> String {
+        let remainingMinutes = max(0, Int(overtime.end.timeIntervalSince(now) / 60))
+        let h = remainingMinutes / 60
+        let m = remainingMinutes % 60
+        if h > 0 {
+            return "加班至 \(formatClock(overtime.end))，剩 \(h)时\(m)分"
+        }
+        return "加班至 \(formatClock(overtime.end))，剩 \(m)分钟"
+    }
+
+    private func formatClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
     }
 
     var formattedEarnings: String {

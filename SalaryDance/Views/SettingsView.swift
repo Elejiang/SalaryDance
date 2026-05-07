@@ -19,7 +19,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .salary: return "薪资"
         case .time: return "时间"
         case .display: return "展示"
-        case .offTask: return "摸鱼"
+        case .offTask: return "记录"
         case .shortcut: return "快捷键"
         case .calendar: return "日历"
         case .app: return "应用"
@@ -31,7 +31,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .salary: return "输入薪资、补贴和金额精度"
         case .time: return "工作时段、休息和计薪时长"
         case .display: return "状态栏、弹窗和时间轴"
-        case .offTask: return "今日统计和历史记录"
+        case .offTask: return "摸鱼、提前下班和加班统计"
         case .shortcut: return "快捷键录制和动作顺序"
         case .calendar: return "计薪规则、节假日和调休日"
         case .app: return "启动、刷新和备份迁移"
@@ -134,6 +134,43 @@ private struct OffTaskDisplayPeriod: Identifiable {
     let title: String
     let rangeText: String
     let summary: OffTaskAggregateSummary
+}
+
+private struct WorkSessionDisplayPeriod: Identifiable {
+    let id: String
+    let title: String
+    let rangeText: String
+    let summary: WorkSessionAggregateSummary
+}
+
+private struct WorkSessionHistoryYear: Identifiable {
+    let id: String
+    let title: String
+    let months: [WorkSessionHistoryMonth]
+    let seconds: TimeInterval
+    let clockOutAmount: Double
+    let overtimeAmount: Double
+    let recordCount: Int
+    let dayCount: Int
+}
+
+private struct WorkSessionHistoryMonth: Identifiable {
+    let id: String
+    let title: String
+    let days: [WorkSessionHistoryDay]
+    let seconds: TimeInterval
+    let clockOutAmount: Double
+    let overtimeAmount: Double
+    let recordCount: Int
+}
+
+private struct WorkSessionHistoryDay: Identifiable {
+    let id: String
+    let title: String
+    let summaries: [WorkSessionRecordSummary]
+    let seconds: TimeInterval
+    let clockOutAmount: Double
+    let overtimeAmount: Double
 }
 
 private struct SecondPrecisionDateTimePicker: View {
@@ -414,6 +451,7 @@ struct SettingsView: View {
     @ObservedObject var holidayManager = ChineseHolidays.shared
     @ObservedObject var shortcutMonitor = GlobalShortcutMonitor.shared
     @ObservedObject var offTaskTracker = OffTaskTracker.shared
+    @ObservedObject var workSessionTracker = WorkSessionTracker.shared
     @State private var tempSalaryAmount: String = ""
     @State private var refreshIntervalText: String = ""
     @State private var fixedMonthlyWorkdaysText: String = ""
@@ -430,6 +468,9 @@ struct SettingsView: View {
     @State private var expandedOffTaskHistoryYears: Set<String> = []
     @State private var expandedOffTaskHistoryMonths: Set<String> = []
     @State private var expandedOffTaskHistoryDays: Set<String> = []
+    @State private var expandedWorkSessionHistoryYears: Set<String> = []
+    @State private var expandedWorkSessionHistoryMonths: Set<String> = []
+    @State private var expandedWorkSessionHistoryDays: Set<String> = []
     @State private var dataTransferStatus: DataTransferStatus?
     private let sidebarWidthRange: ClosedRange<Double> = 168...310
     private static let settingsPageContentPadding: CGFloat = 24
@@ -625,6 +666,7 @@ struct SettingsView: View {
             displaySettingsContent
         case .offTask:
             offTaskStatsSection
+            workSessionStatsSection
         case .shortcut:
             shortcutSettingsSection
         case .calendar:
@@ -1915,6 +1957,32 @@ struct SettingsView: View {
                         }
                     }
 
+                    popoverContentGroup("提前下班与加班") {
+                        HStack(spacing: 10) {
+                            popoverContentToggle("状态入口", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysWorkSessionStatus },
+                                set: { configManager.config.popoverShowsWorkSessionStatus = $0 }
+                            ))
+
+                            popoverContentToggle("今日提示", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysTodayWorkSessionSummary },
+                                set: { configManager.config.popoverShowsTodayWorkSessionSummary = $0 }
+                            ))
+                        }
+
+                        HStack(spacing: 10) {
+                            popoverContentToggle("提前下班入口", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysClockOutAction },
+                                set: { configManager.config.popoverShowsClockOutAction = $0 }
+                            ))
+
+                            popoverContentToggle("加班入口", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysOvertimeAction },
+                                set: { configManager.config.popoverShowsOvertimeAction = $0 }
+                            ))
+                        }
+                    }
+
                     popoverContentGroup("其他") {
                         HStack(spacing: 10) {
                             popoverContentToggle("打工语录", isOn: Binding(
@@ -2051,6 +2119,536 @@ struct SettingsView: View {
             Label("时间轴展示", systemImage: "paintpalette")
                 .font(.headline)
         }
+    }
+
+    /// 提前下班和加班统计按原始记录实时换算；提前下班算赚到的钱，加班默认无收入因此算亏损。
+    private var workSessionStatsSection: some View {
+        let config = configManager.config
+        let today = workSessionTracker.currentSummary(config: config)
+        let total = workSessionTracker.totalSummary(config: config)
+        let displayPeriods = workSessionDisplayPeriods(config: config, today: today)
+        let historyYears = workSessionHistoryYears(config: config)
+        let clockOutAvailability = workSessionTracker.clockOutAvailability(config: config)
+        let overtimeAvailability = workSessionTracker.overtimeAvailability(config: config)
+        let hasClockOut = workSessionTracker.clockOutSession(for: today.workday) != nil
+        let hasOvertime = workSessionTracker.latestOvertimeSession(for: today.workday) != nil
+
+        return VStack(alignment: .leading, spacing: 16) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(workSessionStatusText(today))
+                                .font(.callout.weight(.semibold))
+                            Text(workSessionStatusDetail(today, clockOutAvailability: clockOutAvailability, overtimeAvailability: overtimeAvailability))
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                        }
+
+                        Spacer()
+
+                        HStack(spacing: 8) {
+                            Button {
+                                if hasClockOut {
+                                    workSessionTracker.undoClockOut(for: today.workday)
+                                } else {
+                                    if offTaskTracker.isActive {
+                                        offTaskTracker.stop()
+                                    }
+                                    workSessionTracker.clockOut(config: config)
+                                }
+                            } label: {
+                                Label(hasClockOut ? "撤回提前下班" : "提前下班", systemImage: hasClockOut ? "arrow.uturn.backward" : "checkmark.circle.fill")
+                            }
+                            .disabled(!hasClockOut && !clockOutAvailability.canClockOut)
+                            .help(hasClockOut ? "撤回今日提前下班记录。" : clockOutAvailability.helpMessage)
+                            .controlSize(.small)
+
+                            Button {
+                                workSessionTracker.undoLatestOvertime(config: config)
+                            } label: {
+                                Label("撤回加班", systemImage: "arrow.uturn.backward")
+                            }
+                            .disabled(!hasOvertime)
+                            .help("撤回最近一条今日加班记录。")
+                            .controlSize(.small)
+                        }
+                    }
+
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                        workSessionStatCard(title: "提前下班进账", value: formatMoney(today.clockOutAmount), tint: .green)
+                        workSessionStatCard(title: "提前下班时长", value: formatOffTaskDuration(today.clockOutSeconds), tint: .green)
+                        workSessionStatCard(title: "加班亏损", value: formatMoney(today.overtimeAmount), tint: .indigo)
+                        workSessionStatCard(title: "加班时长", value: formatOffTaskDuration(today.overtimeSeconds), tint: .indigo)
+                    }
+                }
+                .padding(12)
+            } label: {
+                Label("提前下班与加班", systemImage: "timer")
+                    .font(.headline)
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), alignment: .leading, spacing: 10) {
+                        ForEach(displayPeriods) { period in
+                            workSessionPeriodCard(period)
+                        }
+                    }
+                }
+                .padding(12)
+            } label: {
+                Label("提前下班 / 加班概览", systemImage: "chart.bar.xaxis")
+                    .font(.headline)
+            }
+
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                        workSessionStatCard(title: "历史提前下班进账", value: formatMoney(total.clockOutAmount), tint: .green)
+                        workSessionStatCard(title: "历史提前下班时长", value: formatOffTaskDuration(total.clockOutSeconds), tint: .green)
+                        workSessionStatCard(title: "历史加班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
+                        workSessionStatCard(title: "历史加班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
+                    }
+
+                    Divider()
+
+                    HStack(spacing: 8) {
+                        Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        Spacer()
+
+                        offTaskHistoryPill("提前下班 \(total.clockOutCount)次")
+                        offTaskHistoryPill("加班 \(total.overtimeCount)次")
+                        offTaskHistoryPill("\(historyYears.reduce(0) { $0 + $1.dayCount })天")
+                    }
+
+                    if historyYears.isEmpty {
+                        Text("暂无提前下班或加班记录")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(historyYears) { year in
+                                workSessionHistoryYearDisclosure(year, config: config)
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            } label: {
+                Label("提前下班 / 加班历史记录", systemImage: "tray.full")
+                    .font(.headline)
+            }
+        }
+    }
+
+    private func workSessionDisplayPeriods(config: SalaryConfig, today: WorkSessionDailySummary) -> [WorkSessionDisplayPeriod] {
+        let now = Date()
+        let todayAggregate = WorkSessionAggregateSummary(
+            clockOutSeconds: today.clockOutSeconds,
+            clockOutAmount: today.clockOutAmount,
+            clockOutCount: today.clockOutCount,
+            clockOutDayCount: today.hasClockOutRecords ? 1 : 0,
+            overtimeSeconds: today.overtimeSeconds,
+            overtimeAmount: today.overtimeAmount,
+            overtimeCount: today.overtimeCount,
+            overtimeDayCount: today.hasOvertimeRecords ? 1 : 0
+        )
+        let week = offTaskWeekPeriod(containing: now)
+        let settlement = config.salaryCyclePeriod(containing: now)
+        let weekSummary = workSessionTracker.summary(from: week.start, toExclusive: week.endExclusive, config: config, now: now)
+        let settlementSummary = workSessionTracker.summary(from: settlement.start, toExclusive: settlement.endExclusive, config: config, now: now)
+
+        return [
+            WorkSessionDisplayPeriod(
+                id: "today",
+                title: "本日",
+                rangeText: formatOffTaskDateRange(start: today.workday, endExclusive: Calendar.current.date(byAdding: .day, value: 1, to: today.workday) ?? today.workday),
+                summary: todayAggregate
+            ),
+            WorkSessionDisplayPeriod(
+                id: "week",
+                title: "本周",
+                rangeText: formatOffTaskDateRange(start: week.start, endExclusive: week.endExclusive),
+                summary: weekSummary
+            ),
+            WorkSessionDisplayPeriod(
+                id: "settlement",
+                title: offTaskSettlementPeriodTitle(config),
+                rangeText: formatOffTaskDateRange(start: settlement.start, endExclusive: settlement.endExclusive),
+                summary: settlementSummary
+            )
+        ]
+    }
+
+    private func workSessionPeriodCard(_ period: WorkSessionDisplayPeriod) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(period.title)
+                    .font(.callout.weight(.semibold))
+                Text(period.rangeText)
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 7) {
+                workSessionPeriodMetric(title: "提前下班进账", value: formatMoney(period.summary.clockOutAmount))
+                workSessionPeriodMetric(title: "提前下班时长", value: formatOffTaskDuration(period.summary.clockOutSeconds))
+                workSessionPeriodMetric(title: "加班亏损", value: formatMoney(period.summary.overtimeAmount))
+                workSessionPeriodMetric(title: "加班时长", value: formatOffTaskDuration(period.summary.overtimeSeconds))
+
+                HStack(spacing: 8) {
+                    offTaskHistoryPill("提前下班\(period.summary.clockOutCount)次")
+                    offTaskHistoryPill("加班\(period.summary.overtimeCount)次")
+                }
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color.blue.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.blue.opacity(0.16), lineWidth: 1)
+        )
+    }
+
+    private func workSessionPeriodMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text(value)
+                .font(.callout.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+    }
+
+    /// 提前下班与加班历史同样按年、月、日折叠，避免累计数据和明细割裂。
+    private func workSessionHistoryYears(config: SalaryConfig) -> [WorkSessionHistoryYear] {
+        let summaries = workSessionTracker.recordSummaries(config: config)
+        let grouped = Dictionary(grouping: summaries) { summary in
+            offTaskYearKey(summary.workday)
+        }
+
+        return grouped.keys.sorted(by: >).compactMap { key in
+            guard let records = grouped[key] else {
+                return nil
+            }
+            let months = workSessionHistoryMonths(from: records)
+
+            return WorkSessionHistoryYear(
+                id: key,
+                title: formatOffTaskYear(records.first?.workday ?? Date()),
+                months: months,
+                seconds: records.reduce(0) { $0 + $1.seconds },
+                clockOutAmount: records.filter { $0.kind == .clockOut }.reduce(0) { $0 + $1.amount },
+                overtimeAmount: records.filter { $0.kind == .overtime }.reduce(0) { $0 + $1.amount },
+                recordCount: records.count,
+                dayCount: months.reduce(0) { $0 + $1.days.count }
+            )
+        }
+    }
+
+    private func workSessionHistoryMonths(from summaries: [WorkSessionRecordSummary]) -> [WorkSessionHistoryMonth] {
+        let grouped = Dictionary(grouping: summaries) { summary in
+            offTaskMonthKey(summary.workday)
+        }
+
+        return grouped.keys.sorted(by: >).compactMap { key in
+            guard let records = grouped[key] else {
+                return nil
+            }
+            let days = workSessionHistoryDays(from: records)
+
+            return WorkSessionHistoryMonth(
+                id: key,
+                title: formatOffTaskMonth(records.first?.workday ?? Date()),
+                days: days,
+                seconds: records.reduce(0) { $0 + $1.seconds },
+                clockOutAmount: records.filter { $0.kind == .clockOut }.reduce(0) { $0 + $1.amount },
+                overtimeAmount: records.filter { $0.kind == .overtime }.reduce(0) { $0 + $1.amount },
+                recordCount: records.count
+            )
+        }
+    }
+
+    private func workSessionHistoryDays(from summaries: [WorkSessionRecordSummary]) -> [WorkSessionHistoryDay] {
+        let grouped = Dictionary(grouping: summaries) { summary in
+            offTaskDayKey(summary.workday)
+        }
+
+        return grouped.keys.sorted(by: >).compactMap { key in
+            guard let records = grouped[key]?.sorted(by: { lhs, rhs in
+                lhs.end > rhs.end
+            }) else {
+                return nil
+            }
+
+            return WorkSessionHistoryDay(
+                id: key,
+                title: formatOffTaskDay(records.first?.workday ?? Date()),
+                summaries: records,
+                seconds: records.reduce(0) { $0 + $1.seconds },
+                clockOutAmount: records.filter { $0.kind == .clockOut }.reduce(0) { $0 + $1.amount },
+                overtimeAmount: records.filter { $0.kind == .overtime }.reduce(0) { $0 + $1.amount }
+            )
+        }
+    }
+
+    private func workSessionHistoryYearDisclosure(_ year: WorkSessionHistoryYear, config: SalaryConfig) -> some View {
+        let isExpanded = expandedWorkSessionHistoryYears.contains(year.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
+                toggleOffTaskHistoryExpansion(year.id, in: &expandedWorkSessionHistoryYears)
+            } label: {
+                workSessionHistoryGroupLabel(
+                    icon: "calendar",
+                    title: year.title,
+                    detail: "共计\(year.months.count)月 | \(year.dayCount)天",
+                    recordCount: year.recordCount,
+                    seconds: year.seconds,
+                    clockOutAmount: year.clockOutAmount,
+                    overtimeAmount: year.overtimeAmount
+                )
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(year.months) { month in
+                        workSessionHistoryMonthDisclosure(month, config: config)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.52))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.38), lineWidth: 1)
+        )
+    }
+
+    private func workSessionHistoryMonthDisclosure(_ month: WorkSessionHistoryMonth, config: SalaryConfig) -> some View {
+        let isExpanded = expandedWorkSessionHistoryMonths.contains(month.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
+                toggleOffTaskHistoryExpansion(month.id, in: &expandedWorkSessionHistoryMonths)
+            } label: {
+                workSessionHistoryGroupLabel(
+                    icon: "calendar.circle",
+                    title: month.title,
+                    detail: "共计\(month.days.count)天",
+                    recordCount: month.recordCount,
+                    seconds: month.seconds,
+                    clockOutAmount: month.clockOutAmount,
+                    overtimeAmount: month.overtimeAmount
+                )
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(month.days) { day in
+                        workSessionHistoryDayDisclosure(day, config: config)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.46))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.30), lineWidth: 1)
+        )
+    }
+
+    private func workSessionHistoryDayDisclosure(_ day: WorkSessionHistoryDay, config: SalaryConfig) -> some View {
+        let isExpanded = expandedWorkSessionHistoryDays.contains(day.id)
+
+        return VStack(alignment: .leading, spacing: 0) {
+            workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
+                toggleOffTaskHistoryExpansion(day.id, in: &expandedWorkSessionHistoryDays)
+            } label: {
+                workSessionHistoryGroupLabel(
+                    icon: "calendar.day.timeline.left",
+                    title: day.title,
+                    detail: nil,
+                    recordCount: day.summaries.count,
+                    seconds: day.seconds,
+                    clockOutAmount: day.clockOutAmount,
+                    overtimeAmount: day.overtimeAmount
+                )
+            }
+
+            if isExpanded {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("类型")
+                            .frame(width: 72, alignment: .leading)
+                        Text("起止时间")
+                            .frame(width: 132, alignment: .leading)
+                        Text("时长")
+                            .frame(width: 86, alignment: .leading)
+                        Text("金额")
+                            .frame(width: 96, alignment: .leading)
+                        Text("状态")
+                            .frame(width: 64, alignment: .leading)
+                        Spacer()
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 4)
+
+                    ForEach(day.summaries) { summary in
+                        workSessionRecordRow(summary)
+                    }
+                }
+                .padding(.top, 8)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.36))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.24), lineWidth: 1)
+        )
+    }
+
+    private func workSessionHistoryDisclosureButton<Label: View>(
+        isExpanded: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(nsColor: .controlBackgroundColor).opacity(0.82))
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(.blue)
+                }
+                .frame(width: 28, height: 28)
+
+                label()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxWidth: .infinity, minHeight: 34, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .help(isExpanded ? "收起记录" : "展开记录")
+    }
+
+    private func workSessionHistoryGroupLabel(
+        icon: String,
+        title: String,
+        detail: String?,
+        recordCount: Int,
+        seconds: TimeInterval,
+        clockOutAmount: Double,
+        overtimeAmount: Double
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.blue)
+                .frame(width: 16)
+
+            Text(title)
+                .font(.callout.weight(.semibold))
+
+            if let detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer(minLength: 10)
+
+            offTaskHistoryPill("\(recordCount)次")
+            offTaskHistoryPill(formatOffTaskDuration(seconds))
+            Text("进账 \(formatMoney(clockOutAmount)) / 亏损 \(formatMoney(overtimeAmount))")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundColor(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .foregroundColor(.primary)
+    }
+
+    private func workSessionRecordRow(_ summary: WorkSessionRecordSummary) -> some View {
+        let tint: Color = summary.kind == .clockOut ? .green : .indigo
+
+        return HStack(spacing: 10) {
+            Label(summary.kind.title, systemImage: summary.kind == .clockOut ? "checkmark.circle.fill" : "plus.circle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundColor(tint)
+                .frame(width: 72, alignment: .leading)
+
+            Text("\(formatWorkSessionClock(summary.start)) - \(formatWorkSessionClock(summary.end))")
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .frame(width: 132, alignment: .leading)
+
+            Text(formatOffTaskDuration(summary.seconds))
+                .font(.caption.monospacedDigit())
+                .frame(width: 86, alignment: .leading)
+
+            Text(formatMoney(summary.amount))
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundColor(tint)
+                .frame(width: 96, alignment: .leading)
+
+            Text(summary.isActive ? "进行中" : "已完成")
+                .font(.caption2)
+                .foregroundColor(summary.isActive ? tint : .secondary)
+                .frame(width: 64, alignment: .leading)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.34), lineWidth: 1)
+        )
     }
 
     /// 摸鱼统计直接按已记录区间和当前薪资规则实时汇总，便于对照当日、周期和长期数据。
@@ -2232,13 +2830,14 @@ struct SettingsView: View {
     }
 
     private func offTaskPeriodMetric(title: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(.caption2)
                 .foregroundColor(.secondary)
-                .frame(width: 52, alignment: .leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
             Text(value)
-                .font(.caption.weight(.semibold))
+                .font(.callout.weight(.semibold))
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
@@ -2636,7 +3235,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 dataTransferRow(
                     title: "数据",
-                    detail: "包含薪资数据、补贴、计薪规则、工作时间和所有摸鱼记录；",
+                    detail: "包含薪资数据、补贴、计薪规则、工作时间和所有摸鱼、提前下班、加班记录；",
                     exportTitle: "导出数据",
                     importTitle: "导入数据",
                     exportAction: exportAllData,
@@ -2769,7 +3368,9 @@ struct SettingsView: View {
 
             let data = try SalaryDataTransfer.encodeDataDocument(
                 config: configManager.config,
-                offTaskSessions: offTaskTracker.sessions
+                offTaskSessions: offTaskTracker.sessions,
+                clockOutSessions: workSessionTracker.clockOutSessions,
+                overtimeSessions: workSessionTracker.overtimeSessions
             )
             try data.write(to: url, options: [.atomic])
             dataTransferStatus = .success("数据已导出：\(url.lastPathComponent)")
@@ -2784,14 +3385,17 @@ struct SettingsView: View {
             let data = try Data(contentsOf: url)
             let document = try SalaryDataTransfer.decodeDataDocument(from: data)
             let normalizedSessions = try OffTaskTracker.normalizedImportedSessions(document.offTaskSessions)
+            let normalizedClockOutSessions = try WorkSessionTracker.normalizedImportedClockOutSessions(document.clockOutSessions)
+            let normalizedOvertimeSessions = try WorkSessionTracker.normalizedImportedOvertimeSessions(document.overtimeSessions)
 
             guard confirmImport(
                 title: "导入数据？",
-                message: "这会替换当前薪资数据、补贴、计薪规则、工作时间和所有摸鱼记录；展示、快捷键和应用偏好不会改变。"
+                message: "这会替换当前薪资数据、补贴、计薪规则、工作时间和所有摸鱼、提前下班、加班记录；展示、快捷键和应用偏好不会改变。"
             ) else { return }
 
             applyImportedSalaryData(document.salaryData)
             try offTaskTracker.replaceSessionsForImport(normalizedSessions)
+            try workSessionTracker.replaceSessionsForImport(clockOut: normalizedClockOutSessions, overtime: normalizedOvertimeSessions)
             dataTransferStatus = .success("数据已导入：\(url.lastPathComponent)")
         } catch {
             reportDataTransferFailure("数据导入失败：\(error.localizedDescription)")
@@ -2824,7 +3428,7 @@ struct SettingsView: View {
 
             guard confirmImport(
                 title: "导入配置？",
-                message: "这会替换当前展示、快捷键、颜色、刷新、开机启动等偏好；薪资、补贴和摸鱼记录不会改变。"
+                message: "这会替换当前展示、快捷键、颜色、刷新、开机启动等偏好；薪资、补贴和行为记录不会改变。"
             ) else { return }
 
             applyImportedPreferenceConfig(document.preferences, sidebarWidth: document.settingsSidebarWidth)
@@ -3493,12 +4097,12 @@ struct SettingsView: View {
                 .font(.caption2)
                 .foregroundColor(.secondary)
             Text(value)
-                .font(.callout.weight(.semibold))
+                .font(.title3.weight(.semibold))
                 .monospacedDigit()
                 .lineLimit(1)
-                .minimumScaleFactor(0.76)
+                .minimumScaleFactor(0.68)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 10)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
@@ -3509,6 +4113,60 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 7)
                 .stroke(Color.orange.opacity(0.18), lineWidth: 1)
         )
+    }
+
+    private func workSessionStatCard(title: String, value: String, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.title3.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.68)
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(tint.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(tint.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func workSessionStatusText(_ summary: WorkSessionDailySummary) -> String {
+        if workSessionTracker.activeOvertimeSession(config: configManager.config) != nil {
+            return "加班中"
+        }
+        if workSessionTracker.clockOutSession(for: summary.workday) != nil {
+            return "已提前下班"
+        }
+        return "当前未记录"
+    }
+
+    private func workSessionStatusDetail(
+        _ summary: WorkSessionDailySummary,
+        clockOutAvailability: ClockOutAvailability,
+        overtimeAvailability: OvertimeAvailability
+    ) -> String {
+        if let overtime = workSessionTracker.activeOvertimeSession(config: configManager.config) {
+            return "加班到 \(formatOffTaskClock(overtime.end))，今日加班亏损 \(formatMoney(summary.overtimeAmount))"
+        }
+        if let clockOut = workSessionTracker.clockOutSession(for: summary.workday) {
+            return "提前 \(formatOffTaskClock(clockOut.start)) 下班，今日提前下班进账 \(formatMoney(summary.clockOutAmount))"
+        }
+        if clockOutAvailability.canClockOut {
+            return clockOutAvailability.shortMessage
+        }
+        if overtimeAvailability.canStart {
+            return overtimeAvailability.shortMessage
+        }
+        return summary.hasRecords ? "今日已记录提前下班/加班数据" : "今日暂无提前下班/加班记录"
     }
 
     private func offTaskStatusText(_ summary: OffTaskDailySummary) -> String {
@@ -3570,6 +4228,13 @@ struct SettingsView: View {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "HH:mm"
+        return formatter.string(from: date)
+    }
+
+    private func formatWorkSessionClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm:ss"
         return formatter.string(from: date)
     }
 

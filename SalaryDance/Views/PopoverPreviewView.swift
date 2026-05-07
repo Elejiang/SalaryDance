@@ -5,6 +5,8 @@ struct PopoverPreviewView: View {
     let config: SalaryConfig
     @StateObject private var previewViewModel: SalaryViewModel
     @State private var isPrivate: Bool
+    @State private var overtimeHours = 1
+    @State private var overtimeMinutes = 0
 
     private static let previewProgress = 0.42
 
@@ -25,6 +27,8 @@ struct PopoverPreviewView: View {
         let showsSalarySensitiveContent = config.popoverDisplaysCurrentEarnings
             || config.popoverDisplaysRemainingEarnings
             || config.popoverDisplaysAnySalaryRate
+        let showsWorkSessionPanel = config.popoverDisplaysAnyWorkSessionInformation
+        let showsWorkSessionSensitiveContent = showsWorkSessionPanel
         let showsOffTaskSensitiveContent = config.popoverDisplaysAnyOffTaskSalaryMetric
             || config.popoverDisplaysTodayOffTaskSummary
 
@@ -58,6 +62,12 @@ struct PopoverPreviewView: View {
                 if config.popoverDisplaysAnyOffTaskInformation {
                     offTaskPreviewPanel(
                         showsPrivacyAction: showsOffTaskSensitiveContent && !showsSalarySensitiveContent
+                    )
+                }
+
+                if showsWorkSessionPanel {
+                    workSessionPreviewPanel(
+                        showsPrivacyAction: showsWorkSessionSensitiveContent && !showsSalarySensitiveContent && !showsOffTaskSensitiveContent
                     )
                 }
 
@@ -102,6 +112,42 @@ struct PopoverPreviewView: View {
         viewModel.effectivePaidWorkMinutes = config.paidWorkMinutes(workTime: workTime)
         viewModel.earningsPerSecond = config.salaryPerSecond(on: now)
         viewModel.todayEarnings = config.hasCompensation ? dailySalary * Self.previewProgress : 0
+    }
+
+    private func workSessionPreviewPanel(showsPrivacyAction: Bool) -> some View {
+        let clockOutAmount = previewViewModel.effectiveDailySalary * 0.18
+
+        return WorkSessionPopoverPanelView(
+            isPrivate: isPrivate,
+            title: "提前下班与加班",
+            subtitle: "可提前下班",
+            activeOvertimeSummary: nil,
+            summaryText: config.popoverDisplaysTodayWorkSessionSummary
+                ? "今日提前下班 1时20分，剩余 \(isPrivate ? "¥***" : formatMoney(clockOutAmount)) 直接进账。"
+                : nil,
+            showsPrivacyAction: showsPrivacyAction,
+            showsStatus: config.popoverDisplaysWorkSessionStatus,
+            showsClockOutAction: config.popoverDisplaysClockOutAction,
+            showsOvertimeAction: config.popoverDisplaysOvertimeAction,
+            canClockOut: true,
+            hasClockOut: false,
+            canEditOvertimeDuration: true,
+            canStartOvertime: true,
+            canEndOvertime: false,
+            canUndoOvertime: false,
+            overtimeIsActive: false,
+            overtimeHours: $overtimeHours,
+            overtimeMinutes: $overtimeMinutes,
+            clockOutHelp: "预览中不会改写真实提前下班记录。",
+            overtimeHelp: "预览中不会改写真实加班记录。",
+            endOvertimeHelp: "预览中不会改写真实加班记录。",
+            privacyAction: {
+                isPrivate.toggle()
+            },
+            clockOutAction: {},
+            overtimeAction: {},
+            endOvertimeAction: {}
+        )
     }
 
     private func offTaskPreviewPanel(showsPrivacyAction: Bool) -> some View {

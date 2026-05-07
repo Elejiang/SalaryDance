@@ -514,3 +514,590 @@ final class OffTaskTracker: ObservableObject {
         return formatter.string(from: day)
     }
 }
+
+/// 用户提前下班后产生的一段未继续工作的时间，金额按当前薪资规则实时折算为提前下班赚到的金额。
+struct ClockOutSession: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var workday: Date
+    var start: Date
+    var end: Date
+
+    init(id: UUID = UUID(), workday: Date, start: Date, end: Date) {
+        self.id = id
+        self.workday = workday
+        self.start = start
+        self.end = end
+    }
+}
+
+/// 用户在真实下班后选择的一段加班时间，end 是用户计划的加班结束时间。
+struct OvertimeSession: Codable, Equatable, Identifiable {
+    var id: UUID = UUID()
+    var workday: Date
+    var start: Date
+    var end: Date
+
+    init(id: UUID = UUID(), workday: Date, start: Date, end: Date) {
+        self.id = id
+        self.workday = workday
+        self.start = start
+        self.end = end
+    }
+}
+
+enum WorkSessionRecordKind: String, Codable, Equatable {
+    case clockOut
+    case overtime
+
+    var title: String {
+        switch self {
+        case .clockOut:
+            return "提前下班"
+        case .overtime:
+            return "加班"
+        }
+    }
+}
+
+/// 设置页历史明细使用的统一记录视图，金额仍按当前薪资配置实时换算。
+struct WorkSessionRecordSummary: Equatable, Identifiable {
+    let id: String
+    let kind: WorkSessionRecordKind
+    let workday: Date
+    let start: Date
+    let end: Date
+    let seconds: TimeInterval
+    let amount: Double
+    let isActive: Bool
+}
+
+/// 单个工作日的提前下班和加班统计，金额按当前薪资配置实时重算。
+/// 提前下班金额表示提前下班仍赚到的薪资；加班金额表示默认无收入时按当天薪资折算的加班亏损。
+struct WorkSessionDailySummary: Equatable, Identifiable {
+    var id: String { dayKey }
+
+    let workday: Date
+    let dayKey: String
+    let clockOutSeconds: TimeInterval
+    let clockOutAmount: Double
+    let clockOutCount: Int
+    let overtimeSeconds: TimeInterval
+    let overtimeAmount: Double
+    let overtimeCount: Int
+
+    var hasClockOutRecords: Bool {
+        clockOutCount > 0 || clockOutSeconds > 0 || clockOutAmount > 0
+    }
+
+    var hasOvertimeRecords: Bool {
+        overtimeCount > 0 || overtimeSeconds > 0 || overtimeAmount > 0
+    }
+
+    var hasRecords: Bool {
+        hasClockOutRecords || hasOvertimeRecords
+    }
+}
+
+/// 跨工作日聚合后的提前下班和加班统计。
+struct WorkSessionAggregateSummary: Equatable {
+    let clockOutSeconds: TimeInterval
+    let clockOutAmount: Double
+    let clockOutCount: Int
+    let clockOutDayCount: Int
+    let overtimeSeconds: TimeInterval
+    let overtimeAmount: Double
+    let overtimeCount: Int
+    let overtimeDayCount: Int
+
+    var hasRecords: Bool {
+        clockOutCount > 0 || overtimeCount > 0
+    }
+}
+
+struct ClockOutAvailability: Equatable {
+    let canClockOut: Bool
+    let shortMessage: String
+    let helpMessage: String
+
+    static let available = ClockOutAvailability(
+        canClockOut: true,
+        shortMessage: "可提前下班",
+        helpMessage: "当前仍在工作窗口内，可提前下班。"
+    )
+
+    static let outsideWorkTime = ClockOutAvailability(
+        canClockOut: false,
+        shortMessage: "工作窗口外",
+        helpMessage: "只有上班时间内可以提前下班。"
+    )
+
+    static let alreadyClockedOut = ClockOutAvailability(
+        canClockOut: false,
+        shortMessage: "已提前下班",
+        helpMessage: "今日已记录提前下班，可先撤回。"
+    )
+}
+
+struct OvertimeAvailability: Equatable {
+    let canStart: Bool
+    let shortMessage: String
+    let helpMessage: String
+
+    static let available = OvertimeAvailability(
+        canStart: true,
+        shortMessage: "可加班",
+        helpMessage: "当前已到真实下班时间，可记录加班。"
+    )
+
+    static let beforeWorkFinished = OvertimeAvailability(
+        canStart: false,
+        shortMessage: "未到下班",
+        helpMessage: "真实下班后才可以记录加班。"
+    )
+
+    static let active = OvertimeAvailability(
+        canStart: false,
+        shortMessage: "加班中",
+        helpMessage: "已有进行中的加班记录，可先撤回。"
+    )
+}
+
+/// 负责持久化提前下班和加班记录，并把原始时间换算成统计时长与金额。
+final class WorkSessionTracker: ObservableObject {
+    static let shared = WorkSessionTracker()
+
+    @Published private(set) var clockOutSessions: [ClockOutSession] = [] {
+        didSet {
+            saveClockOutSessions()
+        }
+    }
+
+    @Published private(set) var overtimeSessions: [OvertimeSession] = [] {
+        didSet {
+            saveOvertimeSessions()
+        }
+    }
+
+    private struct SummaryAccumulator {
+        var clockOutSeconds: TimeInterval = 0
+        var clockOutAmount: Double = 0
+        var clockOutCount: Int = 0
+        var overtimeSeconds: TimeInterval = 0
+        var overtimeAmount: Double = 0
+        var overtimeCount: Int = 0
+    }
+
+    private let defaults = UserDefaults.standard
+    private let clockOutStorageKey = "clock_out_sessions"
+    private let overtimeStorageKey = "overtime_sessions"
+
+    private init() {
+        clockOutSessions = Self.loadClockOutSessions(defaults: defaults, key: clockOutStorageKey)
+        overtimeSessions = Self.loadOvertimeSessions(defaults: defaults, key: overtimeStorageKey)
+    }
+
+    var isOvertimeActive: Bool {
+        activeOvertimeSession() != nil
+    }
+
+    func activeOvertimeSession(now: Date = Date(), config: SalaryConfig? = nil, calendar: Calendar = .current) -> OvertimeSession? {
+        overtimeSessions.last { session in
+            now >= session.start && now < session.end
+        }
+    }
+
+    func clockOutAvailability(now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> ClockOutAvailability {
+        guard let window = SalaryWorkTimeline.activeWindow(containing: now, config: config, calendar: calendar),
+              now < window.end else {
+            return .outsideWorkTime
+        }
+
+        if clockOutSession(for: window.workday, calendar: calendar) != nil {
+            return .alreadyClockedOut
+        }
+
+        return .available
+    }
+
+    func overtimeAvailability(now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> OvertimeAvailability {
+        if activeOvertimeSession(now: now, config: config, calendar: calendar) != nil {
+            return .active
+        }
+
+        guard let window = SalaryWorkTimeline.latestFinishedWindow(endingAtOrBefore: now, config: config, calendar: calendar) else {
+            return .beforeWorkFinished
+        }
+
+        let relevantWorkday = SalaryWorkTimeline.relevantWorkday(for: now, config: config, calendar: calendar)
+        guard calendar.isDate(relevantWorkday, inSameDayAs: window.workday) else {
+            return .beforeWorkFinished
+        }
+
+        return .available
+    }
+
+    func clockOut(now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) {
+        guard clockOutAvailability(now: now, config: config, calendar: calendar).canClockOut,
+              let window = SalaryWorkTimeline.activeWindow(containing: now, config: config, calendar: calendar),
+              now < window.end else {
+            return
+        }
+
+        clockOutSessions.append(
+            ClockOutSession(
+                workday: calendar.startOfDay(for: window.workday),
+                start: now,
+                end: window.end
+            )
+        )
+        clockOutSessions.sort { $0.start < $1.start }
+    }
+
+    @discardableResult
+    func undoClockOut(for workday: Date, calendar: Calendar = .current) -> Bool {
+        let day = calendar.startOfDay(for: workday)
+        guard let index = clockOutSessions.lastIndex(where: { calendar.isDate($0.workday, inSameDayAs: day) }) else {
+            return false
+        }
+
+        clockOutSessions.remove(at: index)
+        return true
+    }
+
+    func startOvertime(minutes: Int, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) {
+        let normalizedMinutes = minutes
+        guard normalizedMinutes > 0 else {
+            return
+        }
+
+        guard overtimeAvailability(now: now, config: config, calendar: calendar).canStart,
+              let window = SalaryWorkTimeline.latestFinishedWindow(endingAtOrBefore: now, config: config, calendar: calendar),
+              let end = calendar.date(byAdding: .minute, value: normalizedMinutes, to: now),
+              end > now else {
+            return
+        }
+
+        overtimeSessions.append(
+            OvertimeSession(
+                workday: calendar.startOfDay(for: window.workday),
+                start: now,
+                end: end
+            )
+        )
+        overtimeSessions.sort { $0.start < $1.start }
+    }
+
+    @discardableResult
+    func endActiveOvertime(now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        guard let active = activeOvertimeSession(now: now, config: config, calendar: calendar),
+              let index = overtimeSessions.firstIndex(where: { $0.id == active.id }) else {
+            return false
+        }
+
+        let minimumEnd = active.start.addingTimeInterval(1)
+        overtimeSessions[index].end = max(now, minimumEnd)
+        overtimeSessions.sort { $0.start < $1.start }
+        return true
+    }
+
+    @discardableResult
+    func undoLatestOvertime(now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        let workday = activeOvertimeSession(now: now, config: config, calendar: calendar)?.workday
+            ?? currentRecordWorkday(now: now, config: config, calendar: calendar)
+        let day = calendar.startOfDay(for: workday)
+
+        guard let index = overtimeSessions.lastIndex(where: { calendar.isDate($0.workday, inSameDayAs: day) }) else {
+            return false
+        }
+
+        overtimeSessions.remove(at: index)
+        return true
+    }
+
+    func clockOutSession(for workday: Date, calendar: Calendar = .current) -> ClockOutSession? {
+        let day = calendar.startOfDay(for: workday)
+        return clockOutSessions.last { calendar.isDate($0.workday, inSameDayAs: day) }
+    }
+
+    func latestOvertimeSession(for workday: Date, calendar: Calendar = .current) -> OvertimeSession? {
+        let day = calendar.startOfDay(for: workday)
+        return overtimeSessions.last { calendar.isDate($0.workday, inSameDayAs: day) }
+    }
+
+    func currentSummary(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> WorkSessionDailySummary {
+        summary(for: currentRecordWorkday(now: now, config: config, calendar: calendar), config: config, now: now, calendar: calendar)
+    }
+
+    func summary(for workday: Date, config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> WorkSessionDailySummary {
+        let day = calendar.startOfDay(for: workday)
+        let accumulator = summaryMap(config: config, now: now, calendar: calendar)[day] ?? SummaryAccumulator()
+        return dailySummary(for: day, accumulator: accumulator, calendar: calendar)
+    }
+
+    func summary(from start: Date, toExclusive endExclusive: Date, config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> WorkSessionAggregateSummary {
+        let startDay = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: endExclusive)
+        guard endDay > startDay else {
+            return Self.emptyAggregate
+        }
+
+        let values = summaryMap(config: config, now: now, calendar: calendar).filter { day, _ in
+            day >= startDay && day < endDay
+        }.map(\.value)
+
+        return aggregate(values)
+    }
+
+    func totalSummary(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> WorkSessionAggregateSummary {
+        aggregate(Array(summaryMap(config: config, now: now, calendar: calendar).values))
+    }
+
+    func recordSummaries(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> [WorkSessionRecordSummary] {
+        var records: [WorkSessionRecordSummary] = []
+
+        for session in clockOutSessions {
+            let settlement = clockOutSettlement(for: session, config: config, calendar: calendar)
+            records.append(
+                WorkSessionRecordSummary(
+                    id: "clockOut-\(session.id.uuidString)",
+                    kind: .clockOut,
+                    workday: calendar.startOfDay(for: session.workday),
+                    start: session.start,
+                    end: session.end,
+                    seconds: settlement.seconds,
+                    amount: settlement.amount,
+                    isActive: false
+                )
+            )
+        }
+
+        for session in overtimeSessions {
+            let settlement = overtimeSettlement(for: session, now: now, config: config, calendar: calendar)
+            records.append(
+                WorkSessionRecordSummary(
+                    id: "overtime-\(session.id.uuidString)",
+                    kind: .overtime,
+                    workday: calendar.startOfDay(for: session.workday),
+                    start: session.start,
+                    end: session.end,
+                    seconds: settlement.seconds,
+                    amount: settlement.amount,
+                    isActive: now >= session.start && now < session.end
+                )
+            )
+        }
+
+        return records.sorted { lhs, rhs in
+            let lhsEnd = lhs.isActive ? now : lhs.end
+            let rhsEnd = rhs.isActive ? now : rhs.end
+            if lhsEnd == rhsEnd {
+                return lhs.start > rhs.start
+            }
+            return lhsEnd > rhsEnd
+        }
+    }
+
+    func shouldShowPopoverPanel(now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        let summary = currentSummary(config: config, now: now, calendar: calendar)
+        return clockOutAvailability(now: now, config: config, calendar: calendar).canClockOut
+            || clockOutSession(for: summary.workday, calendar: calendar) != nil
+            || overtimeAvailability(now: now, config: config, calendar: calendar).canStart
+            || latestOvertimeSession(for: summary.workday, calendar: calendar) != nil
+            || summary.hasRecords
+    }
+
+    func replaceSessionsForImport(clockOut importedClockOutSessions: [ClockOutSession], overtime importedOvertimeSessions: [OvertimeSession]) throws {
+        clockOutSessions = try Self.normalizedImportedClockOutSessions(importedClockOutSessions)
+        overtimeSessions = try Self.normalizedImportedOvertimeSessions(importedOvertimeSessions)
+    }
+
+    static func normalizedImportedClockOutSessions(_ imported: [ClockOutSession], calendar: Calendar = .current) throws -> [ClockOutSession] {
+        var usedIDs = Set<UUID>()
+        var normalized: [ClockOutSession] = []
+
+        for session in imported {
+            guard session.end > session.start else {
+                throw SalaryDataTransferError.invalidWorkSessionData("存在结束时间不晚于开始时间的提前下班记录")
+            }
+
+            var uniqueSession = ClockOutSession(
+                id: session.id,
+                workday: calendar.startOfDay(for: session.workday),
+                start: session.start,
+                end: session.end
+            )
+            if usedIDs.contains(uniqueSession.id) {
+                uniqueSession.id = UUID()
+            }
+            usedIDs.insert(uniqueSession.id)
+            normalized.append(uniqueSession)
+        }
+
+        return normalized.sorted { $0.start < $1.start }
+    }
+
+    static func normalizedImportedOvertimeSessions(_ imported: [OvertimeSession], calendar: Calendar = .current) throws -> [OvertimeSession] {
+        var usedIDs = Set<UUID>()
+        var normalized: [OvertimeSession] = []
+
+        for session in imported {
+            guard session.end > session.start else {
+                throw SalaryDataTransferError.invalidWorkSessionData("存在结束时间不晚于开始时间的加班记录")
+            }
+
+            var uniqueSession = OvertimeSession(
+                id: session.id,
+                workday: calendar.startOfDay(for: session.workday),
+                start: session.start,
+                end: session.end
+            )
+            if usedIDs.contains(uniqueSession.id) {
+                uniqueSession.id = UUID()
+            }
+            usedIDs.insert(uniqueSession.id)
+            normalized.append(uniqueSession)
+        }
+
+        return normalized.sorted { $0.start < $1.start }
+    }
+
+    private static var emptyAggregate: WorkSessionAggregateSummary {
+        WorkSessionAggregateSummary(
+            clockOutSeconds: 0,
+            clockOutAmount: 0,
+            clockOutCount: 0,
+            clockOutDayCount: 0,
+            overtimeSeconds: 0,
+            overtimeAmount: 0,
+            overtimeCount: 0,
+            overtimeDayCount: 0
+        )
+    }
+
+    private func currentRecordWorkday(now: Date, config: SalaryConfig, calendar: Calendar) -> Date {
+        if let activeOvertime = activeOvertimeSession(now: now, config: config, calendar: calendar) {
+            return calendar.startOfDay(for: activeOvertime.workday)
+        }
+        return SalaryWorkTimeline.relevantWorkday(for: now, config: config, calendar: calendar)
+    }
+
+    private func summaryMap(config: SalaryConfig, now: Date, calendar: Calendar) -> [Date: SummaryAccumulator] {
+        var result: [Date: SummaryAccumulator] = [:]
+
+        for session in clockOutSessions {
+            let day = calendar.startOfDay(for: session.workday)
+            let settlement = clockOutSettlement(for: session, config: config, calendar: calendar)
+            var accumulator = result[day] ?? SummaryAccumulator()
+            accumulator.clockOutSeconds += settlement.seconds
+            accumulator.clockOutAmount += settlement.amount
+            accumulator.clockOutCount += 1
+            result[day] = accumulator
+        }
+
+        for session in overtimeSessions {
+            let day = calendar.startOfDay(for: session.workday)
+            let settlement = overtimeSettlement(for: session, now: now, config: config, calendar: calendar)
+            var accumulator = result[day] ?? SummaryAccumulator()
+            accumulator.overtimeSeconds += settlement.seconds
+            accumulator.overtimeAmount += settlement.amount
+            accumulator.overtimeCount += 1
+            result[day] = accumulator
+        }
+
+        return result
+    }
+
+    private func clockOutSettlement(for session: ClockOutSession, config: SalaryConfig, calendar: Calendar) -> (seconds: TimeInterval, amount: Double) {
+        guard session.end > session.start,
+              let window = SalaryWorkTimeline.workWindow(startingOn: session.workday, config: config, calendar: calendar) else {
+            return (0, 0)
+        }
+
+        let seconds = SalaryWorkTimeline.paidOverlapSeconds(
+            from: session.start,
+            to: min(session.end, window.end),
+            in: window,
+            config: config,
+            calendar: calendar
+        )
+        return (seconds, seconds * window.salaryPerSecond)
+    }
+
+    private func overtimeSettlement(for session: OvertimeSession, now: Date, config: SalaryConfig, calendar: Calendar) -> (seconds: TimeInterval, amount: Double) {
+        guard session.end > session.start,
+              let window = SalaryWorkTimeline.workWindow(startingOn: session.workday, config: config, calendar: calendar) else {
+            return (0, 0)
+        }
+
+        let settledEnd = min(session.end, max(now, session.start))
+        let seconds = max(0, settledEnd.timeIntervalSince(session.start))
+        return (seconds, seconds * window.salaryPerSecond)
+    }
+
+    private func dailySummary(for day: Date, accumulator: SummaryAccumulator, calendar: Calendar) -> WorkSessionDailySummary {
+        WorkSessionDailySummary(
+            workday: day,
+            dayKey: Self.dayKey(for: day, calendar: calendar),
+            clockOutSeconds: accumulator.clockOutSeconds,
+            clockOutAmount: accumulator.clockOutAmount,
+            clockOutCount: accumulator.clockOutCount,
+            overtimeSeconds: accumulator.overtimeSeconds,
+            overtimeAmount: accumulator.overtimeAmount,
+            overtimeCount: accumulator.overtimeCount
+        )
+    }
+
+    private func aggregate(_ values: [SummaryAccumulator]) -> WorkSessionAggregateSummary {
+        WorkSessionAggregateSummary(
+            clockOutSeconds: values.reduce(0) { $0 + $1.clockOutSeconds },
+            clockOutAmount: values.reduce(0) { $0 + $1.clockOutAmount },
+            clockOutCount: values.reduce(0) { $0 + $1.clockOutCount },
+            clockOutDayCount: values.filter { $0.clockOutCount > 0 || $0.clockOutSeconds > 0 || $0.clockOutAmount > 0 }.count,
+            overtimeSeconds: values.reduce(0) { $0 + $1.overtimeSeconds },
+            overtimeAmount: values.reduce(0) { $0 + $1.overtimeAmount },
+            overtimeCount: values.reduce(0) { $0 + $1.overtimeCount },
+            overtimeDayCount: values.filter { $0.overtimeCount > 0 || $0.overtimeSeconds > 0 || $0.overtimeAmount > 0 }.count
+        )
+    }
+
+    private func saveClockOutSessions() {
+        if let data = try? JSONEncoder().encode(clockOutSessions) {
+            defaults.set(data, forKey: clockOutStorageKey)
+        }
+    }
+
+    private func saveOvertimeSessions() {
+        if let data = try? JSONEncoder().encode(overtimeSessions) {
+            defaults.set(data, forKey: overtimeStorageKey)
+        }
+    }
+
+    private static func loadClockOutSessions(defaults: UserDefaults, key: String) -> [ClockOutSession] {
+        guard let data = defaults.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([ClockOutSession].self, from: data),
+              let normalized = try? normalizedImportedClockOutSessions(decoded) else {
+            return []
+        }
+
+        return normalized
+    }
+
+    private static func loadOvertimeSessions(defaults: UserDefaults, key: String) -> [OvertimeSession] {
+        guard let data = defaults.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([OvertimeSession].self, from: data),
+              let normalized = try? normalizedImportedOvertimeSessions(decoded) else {
+            return []
+        }
+
+        return normalized
+    }
+
+    private static func dayKey(for date: Date, calendar: Calendar) -> String {
+        let day = calendar.startOfDay(for: date)
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: day)
+    }
+}

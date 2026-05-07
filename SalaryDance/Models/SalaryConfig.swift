@@ -687,6 +687,14 @@ struct SalaryConfig: Codable, Equatable {
     var popoverShowsSalaryCycleOffTaskDuration: Bool = false
     /// 弹窗摸鱼卡片是否显示历史累计摸鱼时长。
     var popoverShowsHistoricalOffTaskDuration: Bool = false
+    /// 弹窗是否显示提前下班与加班面板标题和状态。
+    var popoverShowsWorkSessionStatus: Bool = false
+    /// 弹窗提前下班与加班面板是否显示今日提示文案。
+    var popoverShowsTodayWorkSessionSummary: Bool = true
+    /// 弹窗提前下班与加班面板是否显示提前下班操作。
+    var popoverShowsClockOutAction: Bool = true
+    /// 弹窗提前下班与加班面板是否显示加班操作。
+    var popoverShowsOvertimeAction: Bool = true
     /// 点击状态栏入口时是否默认以脱敏模式打开弹窗。
     var statusItemClickShowsPrivatePopover: Bool = false
     /// 状态栏是否显示 App 图标。
@@ -784,6 +792,10 @@ struct SalaryConfig: Codable, Equatable {
         case popoverShowsWeekOffTaskDuration
         case popoverShowsSalaryCycleOffTaskDuration
         case popoverShowsHistoricalOffTaskDuration
+        case popoverShowsWorkSessionStatus
+        case popoverShowsTodayWorkSessionSummary
+        case popoverShowsClockOutAction
+        case popoverShowsOvertimeAction
         case statusItemClickShowsPrivatePopover
         case statusBarShowsAppIcon
         case statusBarShowsCurrencySymbol
@@ -861,6 +873,10 @@ struct SalaryConfig: Codable, Equatable {
         popoverShowsWeekOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsWeekOffTaskDuration, default: defaults.popoverShowsWeekOffTaskDuration)
         popoverShowsSalaryCycleOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsSalaryCycleOffTaskDuration, default: defaults.popoverShowsSalaryCycleOffTaskDuration)
         popoverShowsHistoricalOffTaskDuration = container.decodeLossy(Bool.self, forKey: .popoverShowsHistoricalOffTaskDuration, default: defaults.popoverShowsHistoricalOffTaskDuration)
+        popoverShowsWorkSessionStatus = container.decodeLossy(Bool.self, forKey: .popoverShowsWorkSessionStatus, default: defaults.popoverShowsWorkSessionStatus)
+        popoverShowsTodayWorkSessionSummary = container.decodeLossy(Bool.self, forKey: .popoverShowsTodayWorkSessionSummary, default: defaults.popoverShowsTodayWorkSessionSummary)
+        popoverShowsClockOutAction = container.decodeLossy(Bool.self, forKey: .popoverShowsClockOutAction, default: defaults.popoverShowsClockOutAction)
+        popoverShowsOvertimeAction = container.decodeLossy(Bool.self, forKey: .popoverShowsOvertimeAction, default: defaults.popoverShowsOvertimeAction)
         statusItemClickShowsPrivatePopover = container.decodeLossy(Bool.self, forKey: .statusItemClickShowsPrivatePopover, default: defaults.statusItemClickShowsPrivatePopover)
         statusBarShowsAppIcon = container.decodeLossy(Bool.self, forKey: .statusBarShowsAppIcon, default: defaults.statusBarShowsAppIcon)
         statusBarShowsCurrencySymbol = container.decodeLossy(Bool.self, forKey: .statusBarShowsCurrencySymbol, default: defaults.statusBarShowsCurrencySymbol)
@@ -1045,6 +1061,22 @@ struct SalaryConfig: Codable, Equatable {
         popoverShowsHistoricalOffTaskDuration
     }
 
+    var popoverDisplaysWorkSessionStatus: Bool {
+        popoverShowsWorkSessionStatus
+    }
+
+    var popoverDisplaysTodayWorkSessionSummary: Bool {
+        popoverShowsTodayWorkSessionSummary
+    }
+
+    var popoverDisplaysClockOutAction: Bool {
+        popoverShowsClockOutAction
+    }
+
+    var popoverDisplaysOvertimeAction: Bool {
+        popoverShowsOvertimeAction
+    }
+
     var popoverDisplaysAnyOffTaskSalaryMetric: Bool {
         popoverDisplaysTodayOffTaskSalary
             || popoverDisplaysWeekOffTaskSalary
@@ -1068,6 +1100,13 @@ struct SalaryConfig: Codable, Equatable {
         popoverDisplaysOffTaskStatus
             || popoverDisplaysTodayOffTaskSummary
             || popoverDisplaysAnyOffTaskMetric
+    }
+
+    var popoverDisplaysAnyWorkSessionInformation: Bool {
+        popoverDisplaysWorkSessionStatus
+            || popoverDisplaysTodayWorkSessionSummary
+            || popoverDisplaysClockOutAction
+            || popoverDisplaysOvertimeAction
     }
 
     var usesLunchBreak: Bool {
@@ -1189,6 +1228,7 @@ struct SalaryConfig: Codable, Equatable {
             || popoverDisplaysAnySalaryRate
             || popoverDisplaysWorkProgress
             || popoverDisplaysAnyOffTaskInformation
+            || popoverDisplaysAnyWorkSessionInformation
             || popoverDisplaysQuote
     }
 
@@ -1910,6 +1950,10 @@ struct SalaryPreferenceSettings: Codable, Equatable {
     var popoverShowsWeekOffTaskDuration: Bool
     var popoverShowsSalaryCycleOffTaskDuration: Bool
     var popoverShowsHistoricalOffTaskDuration: Bool
+    var popoverShowsWorkSessionStatus: Bool?
+    var popoverShowsTodayWorkSessionSummary: Bool?
+    var popoverShowsClockOutAction: Bool?
+    var popoverShowsOvertimeAction: Bool?
     var statusItemClickShowsPrivatePopover: Bool
     var statusBarShowsAppIcon: Bool
     var statusBarShowsCurrencySymbol: Bool
@@ -1964,6 +2008,10 @@ struct SalaryPreferenceSettings: Codable, Equatable {
         popoverShowsWeekOffTaskDuration = config.popoverShowsWeekOffTaskDuration
         popoverShowsSalaryCycleOffTaskDuration = config.popoverShowsSalaryCycleOffTaskDuration
         popoverShowsHistoricalOffTaskDuration = config.popoverShowsHistoricalOffTaskDuration
+        popoverShowsWorkSessionStatus = config.popoverShowsWorkSessionStatus
+        popoverShowsTodayWorkSessionSummary = config.popoverShowsTodayWorkSessionSummary
+        popoverShowsClockOutAction = config.popoverShowsClockOutAction
+        popoverShowsOvertimeAction = config.popoverShowsOvertimeAction
         statusItemClickShowsPrivatePopover = config.statusItemClickShowsPrivatePopover
         statusBarShowsAppIcon = config.statusBarShowsAppIcon
         statusBarShowsCurrencySymbol = config.statusBarShowsCurrencySymbol
@@ -2020,6 +2068,10 @@ struct SalaryPreferenceSettings: Codable, Equatable {
         updated.popoverShowsWeekOffTaskDuration = popoverShowsWeekOffTaskDuration
         updated.popoverShowsSalaryCycleOffTaskDuration = popoverShowsSalaryCycleOffTaskDuration
         updated.popoverShowsHistoricalOffTaskDuration = popoverShowsHistoricalOffTaskDuration
+        updated.popoverShowsWorkSessionStatus = popoverShowsWorkSessionStatus ?? false
+        updated.popoverShowsTodayWorkSessionSummary = popoverShowsTodayWorkSessionSummary ?? true
+        updated.popoverShowsClockOutAction = popoverShowsClockOutAction ?? true
+        updated.popoverShowsOvertimeAction = popoverShowsOvertimeAction ?? true
         updated.statusItemClickShowsPrivatePopover = statusItemClickShowsPrivatePopover
         updated.statusBarShowsAppIcon = statusBarShowsAppIcon
         updated.statusBarShowsCurrencySymbol = statusBarShowsCurrencySymbol
@@ -2065,7 +2117,7 @@ struct SalaryConfigExportDocument: Codable {
     var settingsSidebarWidth: Double?
 }
 
-/// 数据导入导出的文件格式。包含薪资数据、补贴、计薪规则、工作时间和用户产生的全部摸鱼记录。
+/// 数据导入导出的文件格式。包含薪资数据、补贴、计薪规则、工作时间和用户产生的全部行为记录。
 struct SalaryDataExportDocument: Codable {
     /// 文件类型标识，用于导入时区分数据文件和配置文件。
     var documentType = "salarydance.data"
@@ -2077,12 +2129,50 @@ struct SalaryDataExportDocument: Codable {
     var salaryData: SalaryDataSettings
     /// 用户产生的全部摸鱼原始记录。
     var offTaskSessions: [OffTaskSession]
+    /// 用户产生的全部提前下班原始记录。
+    var clockOutSessions: [ClockOutSession]
+    /// 用户产生的全部加班原始记录。
+    var overtimeSessions: [OvertimeSession]
+
+    private enum CodingKeys: String, CodingKey {
+        case documentType
+        case schemaVersion
+        case exportedAt
+        case salaryData
+        case offTaskSessions
+        case clockOutSessions
+        case overtimeSessions
+    }
+
+    init(
+        salaryData: SalaryDataSettings,
+        offTaskSessions: [OffTaskSession],
+        clockOutSessions: [ClockOutSession] = [],
+        overtimeSessions: [OvertimeSession] = []
+    ) {
+        self.salaryData = salaryData
+        self.offTaskSessions = offTaskSessions
+        self.clockOutSessions = clockOutSessions
+        self.overtimeSessions = overtimeSessions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        documentType = container.decodeLossy(String.self, forKey: .documentType, default: "salarydance.data")
+        schemaVersion = container.decodeLossy(Int.self, forKey: .schemaVersion, default: 1)
+        exportedAt = container.decodeLossy(Date.self, forKey: .exportedAt, default: Date())
+        salaryData = try container.decode(SalaryDataSettings.self, forKey: .salaryData)
+        offTaskSessions = container.decodeLossy([OffTaskSession].self, forKey: .offTaskSessions, default: [])
+        clockOutSessions = container.decodeLossy([ClockOutSession].self, forKey: .clockOutSessions, default: [])
+        overtimeSessions = container.decodeLossy([OvertimeSession].self, forKey: .overtimeSessions, default: [])
+    }
 }
 
 enum SalaryDataTransferError: LocalizedError {
     case invalidConfigFile
     case invalidDataFile
     case invalidOffTaskData(String)
+    case invalidWorkSessionData(String)
 
     var errorDescription: String? {
         switch self {
@@ -2092,6 +2182,8 @@ enum SalaryDataTransferError: LocalizedError {
             return "无法识别数据文件，请选择薪动导出的数据 JSON。"
         case .invalidOffTaskData(let message):
             return "摸鱼记录无效：\(message)。"
+        case .invalidWorkSessionData(let message):
+            return "提前下班/加班记录无效：\(message)。"
         }
     }
 }
@@ -2115,10 +2207,17 @@ enum SalaryDataTransfer {
         throw SalaryDataTransferError.invalidConfigFile
     }
 
-    static func encodeDataDocument(config: SalaryConfig, offTaskSessions: [OffTaskSession]) throws -> Data {
+    static func encodeDataDocument(
+        config: SalaryConfig,
+        offTaskSessions: [OffTaskSession],
+        clockOutSessions: [ClockOutSession],
+        overtimeSessions: [OvertimeSession]
+    ) throws -> Data {
         let document = SalaryDataExportDocument(
             salaryData: SalaryDataSettings(config: config),
-            offTaskSessions: offTaskSessions
+            offTaskSessions: offTaskSessions,
+            clockOutSessions: clockOutSessions,
+            overtimeSessions: overtimeSessions
         )
         return try jsonEncoder().encode(document)
     }
