@@ -47,6 +47,20 @@ struct OffTaskSessionSummary: Equatable, Identifiable {
     let paidSeconds: TimeInterval
     let amount: Double
     let isActive: Bool
+    let countedInStatistics: Bool
+    let settlementNote: String?
+}
+
+/// 合并摸鱼记录前的预览分组，展示哪些同工作日重叠区间会被压成一条原始记录。
+struct OffTaskMergePreviewCluster: Equatable, Identifiable {
+    let id: String
+    let workday: Date
+    let originalSessions: [OffTaskSession]
+    let mergedSession: OffTaskSession
+
+    var removedRecordCount: Int {
+        max(0, originalSessions.count - 1)
+    }
 }
 
 /// 摸鱼开关的当前可用性，按钮、提示和快捷键入口共用同一套判断。
@@ -165,6 +179,37 @@ final class OffTaskTracker: ObservableObject {
         sessions.append(OffTaskSession(start: now))
     }
 
+    static func sessionValidationMessage(start: Date, end: Date, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> String? {
+        guard end > start else {
+            return "结束时间必须晚于开始时间"
+        }
+
+        guard end <= now else {
+            return "结束时间不能超过当前时间"
+        }
+
+        guard let window = SalaryWorkTimeline.activeWindow(containing: start, config: config, calendar: calendar) else {
+            return "开始时间必须在有效工作窗口内"
+        }
+
+        guard end <= window.end else {
+            return "摸鱼结束时间不能超过当天下班时间"
+        }
+
+        return nil
+    }
+
+    @discardableResult
+    func addSession(start: Date, end: Date, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        guard Self.sessionValidationMessage(start: start, end: end, now: now, config: config, calendar: calendar) == nil else {
+            return false
+        }
+
+        sessions.append(OffTaskSession(start: start, end: end))
+        sessions.sort { $0.start < $1.start }
+        return true
+    }
+
     func stop(now: Date = Date()) {
         guard let index = sessions.lastIndex(where: { $0.end == nil }) else { return }
         var updated = sessions
@@ -179,14 +224,26 @@ final class OffTaskTracker: ObservableObject {
     }
 
     @discardableResult
-    func updateSessionTimeRange(id: UUID, start: Date, end: Date?) -> Bool {
+    func updateSessionTimeRange(id: UUID, start: Date, end: Date?, now: Date = Date(), config: SalaryConfig? = nil, calendar: Calendar = .current) -> Bool {
         guard let index = sessions.firstIndex(where: { $0.id == id }) else {
             return false
         }
 
         let keepsOpenSession = end == nil && sessions[index].end == nil
-        guard end.map({ $0 > start }) ?? (keepsOpenSession ? Date() > start : true) else {
-            return false
+        if let end {
+            if let config {
+                guard Self.sessionValidationMessage(start: start, end: end, now: now, config: config, calendar: calendar) == nil else {
+                    return false
+                }
+            } else {
+                guard end > start else {
+                    return false
+                }
+            }
+        } else {
+            guard keepsOpenSession ? now > start : true else {
+                return false
+            }
         }
 
         var updated = sessions
@@ -206,6 +263,36 @@ final class OffTaskTracker: ObservableObject {
         updated.remove(at: index)
         sessions = updated
         return true
+    }
+
+    @discardableResult
+    func deleteSessions(ids: Set<UUID>) -> Int {
+        guard !ids.isEmpty else { return 0 }
+
+        let originalCount = sessions.count
+        let updated = sessions.filter { !ids.contains($0.id) }
+        guard updated.count != originalCount else { return 0 }
+
+        sessions = updated
+        return originalCount - updated.count
+    }
+
+    func overlappingMergeCountByWorkday(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        overlappingMergePreviewByWorkday(config: config, now: now, calendar: calendar).reduce(0) { $0 + $1.removedRecordCount }
+    }
+
+    func overlappingMergePreviewByWorkday(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> [OffTaskMergePreviewCluster] {
+        mergedOverlappingSessionsByWorkday(config: config, now: now, calendar: calendar).previewClusters
+    }
+
+    @discardableResult
+    func mergeOverlappingSessionsByWorkday(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> Int {
+        let result = mergedOverlappingSessionsByWorkday(config: config, now: now, calendar: calendar)
+        let mergedCount = result.previewClusters.reduce(0) { $0 + $1.removedRecordCount }
+        guard mergedCount > 0 else { return 0 }
+
+        sessions = result.sessions
+        return mergedCount
     }
 
     /// 导入替换的是用户原始记录，先在内存中完整校验并规范排序，避免落入多个进行中记录等无法稳定展示的状态。
@@ -307,6 +394,10 @@ final class OffTaskTracker: ObservableObject {
             }
     }
 
+    func previewSessionSummary(start: Date, end: Date, config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> OffTaskSessionSummary {
+        sessionSummary(for: OffTaskSession(start: start, end: end), config: config, now: now, calendar: calendar)
+    }
+
     private func closeOpenSessionIfNeeded(now: Date, config: SalaryConfig, calendar: Calendar = .current) {
         guard let index = sessions.lastIndex(where: { $0.end == nil }) else { return }
         let session = sessions[index]
@@ -391,6 +482,7 @@ final class OffTaskTracker: ObservableObject {
                     config: config,
                     calendar: calendar
                 )
+                guard paidSeconds > 0 else { continue }
 
                 var accumulator = result[window.workday] ?? SummaryAccumulator()
                 accumulator.paidSeconds += paidSeconds
@@ -422,14 +514,23 @@ final class OffTaskTracker: ObservableObject {
         var paidSeconds: TimeInterval = 0
         var amount: Double = 0
         var matchedWorkday: Date?
+        var workWindowOverlapSeconds: TimeInterval = 0
+        var unpaidBreakOverlapSeconds: TimeInterval = 0
 
         if end > session.start {
             for day in candidateWorkdays(from: session.start, to: end, calendar: calendar) {
                 guard let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar) else { continue }
 
-                let windowOverlapStart = max(session.start, window.start)
-                let windowOverlapEnd = min(end, window.end)
-                guard windowOverlapEnd > windowOverlapStart else { continue }
+                let windowOverlap = SalaryWorkTimeline.workWindowOverlapSeconds(from: session.start, to: end, in: window)
+                guard windowOverlap > 0 else { continue }
+                workWindowOverlapSeconds += windowOverlap
+                unpaidBreakOverlapSeconds += SalaryWorkTimeline.unpaidBreakOverlapSeconds(
+                    from: session.start,
+                    to: end,
+                    in: window,
+                    config: config,
+                    calendar: calendar
+                )
 
                 let seconds = SalaryWorkTimeline.paidOverlapSeconds(
                     from: session.start,
@@ -444,13 +545,150 @@ final class OffTaskTracker: ObservableObject {
             }
         }
 
+        let countedInStatistics = paidSeconds > 0
         return OffTaskSessionSummary(
             session: session,
             workday: matchedWorkday ?? SalaryWorkTimeline.relevantWorkday(for: session.start, config: config, calendar: calendar),
             paidSeconds: paidSeconds,
             amount: amount,
-            isActive: session.end == nil
+            isActive: session.end == nil,
+            countedInStatistics: countedInStatistics,
+            settlementNote: Self.settlementNote(
+                countedInStatistics: countedInStatistics,
+                workWindowOverlapSeconds: workWindowOverlapSeconds,
+                unpaidBreakOverlapSeconds: unpaidBreakOverlapSeconds,
+                config: config
+            )
         )
+    }
+
+    private static func settlementNote(
+        countedInStatistics: Bool,
+        workWindowOverlapSeconds: TimeInterval,
+        unpaidBreakOverlapSeconds: TimeInterval,
+        config: SalaryConfig
+    ) -> String? {
+        if !config.countsBreakTimeAsPaidWork, unpaidBreakOverlapSeconds > 0 {
+            if countedInStatistics {
+                return "当前休息时间未计薪，午休/晚饭重叠部分已从统计中扣除。"
+            }
+            return "当前休息时间未计薪，这条记录保留在历史中，但不计入摸鱼薪资、时长和次数。"
+        }
+
+        if !countedInStatistics {
+            if workWindowOverlapSeconds > 0 {
+                return "当前计薪规则下没有可结算时长，记录保留但不计入统计。"
+            }
+            return "当前计薪规则下不在有效工作窗口内，记录保留但不计入统计。"
+        }
+
+        return nil
+    }
+
+    private func mergedOverlappingSessionsByWorkday(
+        config: SalaryConfig,
+        now: Date,
+        calendar: Calendar
+    ) -> (sessions: [OffTaskSession], previewClusters: [OffTaskMergePreviewCluster]) {
+        var workdayBySessionID: [UUID: Date] = [:]
+        for session in sessions {
+            let summary = sessionSummary(for: session, config: config, now: now, calendar: calendar)
+            workdayBySessionID[session.id] = calendar.startOfDay(for: summary.workday)
+        }
+        let grouped = Dictionary(grouping: sessions) { session in
+            workdayBySessionID[session.id] ?? calendar.startOfDay(for: session.start)
+        }
+
+        var mergedSessions: [OffTaskSession] = []
+        var previewClusters: [OffTaskMergePreviewCluster] = []
+
+        for workday in grouped.keys.sorted() {
+            let group = (grouped[workday] ?? []).sorted { lhs, rhs in
+                if lhs.start == rhs.start {
+                    return (lhs.end ?? now) < (rhs.end ?? now)
+                }
+                return lhs.start < rhs.start
+            }
+            var current: OffTaskSession?
+            var currentOriginals: [OffTaskSession] = []
+
+            for session in group {
+                guard let existing = current else {
+                    current = session
+                    currentOriginals = [session]
+                    continue
+                }
+
+                if Self.sessionsOverlap(existing, session, now: now) {
+                    current = Self.mergedSession(existing, session)
+                    currentOriginals.append(session)
+                } else {
+                    Self.appendMergeResult(
+                        existing,
+                        workday: workday,
+                        originals: currentOriginals,
+                        to: &mergedSessions,
+                        previewClusters: &previewClusters
+                    )
+                    current = session
+                    currentOriginals = [session]
+                }
+            }
+
+            if let current {
+                Self.appendMergeResult(
+                    current,
+                    workday: workday,
+                    originals: currentOriginals,
+                    to: &mergedSessions,
+                    previewClusters: &previewClusters
+                )
+            }
+        }
+
+        return (mergedSessions.sorted { $0.start < $1.start }, previewClusters)
+    }
+
+    private static func appendMergeResult(
+        _ session: OffTaskSession,
+        workday: Date,
+        originals: [OffTaskSession],
+        to mergedSessions: inout [OffTaskSession],
+        previewClusters: inout [OffTaskMergePreviewCluster]
+    ) {
+        mergedSessions.append(session)
+
+        guard originals.count > 1 else { return }
+        previewClusters.append(
+            OffTaskMergePreviewCluster(
+                id: originals.map(\.id.uuidString).joined(separator: "-"),
+                workday: workday,
+                originalSessions: originals,
+                mergedSession: session
+            )
+        )
+    }
+
+    private static func sessionsOverlap(_ lhs: OffTaskSession, _ rhs: OffTaskSession, now: Date) -> Bool {
+        let lhsEnd = lhs.end ?? now
+        let rhsEnd = rhs.end ?? now
+        guard lhsEnd > lhs.start, rhsEnd > rhs.start else { return false }
+        return lhs.start < rhsEnd && rhs.start < lhsEnd
+    }
+
+    private static func mergedSession(_ lhs: OffTaskSession, _ rhs: OffTaskSession) -> OffTaskSession {
+        let includesActiveSession = lhs.end == nil || rhs.end == nil
+        let id = lhs.end == nil ? lhs.id : (rhs.end == nil ? rhs.id : lhs.id)
+        let start = min(lhs.start, rhs.start)
+        let end: Date?
+
+        if includesActiveSession {
+            end = nil
+        } else {
+            end = max(lhs.end ?? lhs.start, rhs.end ?? rhs.start)
+        }
+
+        return OffTaskSession(id: id, start: start, end: end)
     }
 
     /// 跨夜窗口要求额外检查开始自然日的前一天，否则凌晨区间会丢失归属的工作日。
@@ -545,7 +783,7 @@ struct OvertimeSession: Codable, Equatable, Identifiable {
     }
 }
 
-enum WorkSessionRecordKind: String, Codable, Equatable {
+enum WorkSessionRecordKind: String, Codable, Equatable, Hashable, CaseIterable {
     case clockOut
     case overtime
 
@@ -559,9 +797,15 @@ enum WorkSessionRecordKind: String, Codable, Equatable {
     }
 }
 
+struct WorkSessionRecordIdentifier: Equatable, Hashable {
+    let kind: WorkSessionRecordKind
+    let id: UUID
+}
+
 /// 设置页历史明细使用的统一记录视图，金额仍按当前薪资配置实时换算。
 struct WorkSessionRecordSummary: Equatable, Identifiable {
     let id: String
+    let recordIdentifier: WorkSessionRecordIdentifier
     let kind: WorkSessionRecordKind
     let workday: Date
     let start: Date
@@ -636,6 +880,12 @@ struct ClockOutAvailability: Equatable {
         shortMessage: "已提前下班",
         helpMessage: "今日已记录提前下班，可先撤回。"
     )
+
+    static let alreadyOvertime = ClockOutAvailability(
+        canClockOut: false,
+        shortMessage: "已加班",
+        helpMessage: "该工作日已有加班记录，不能再提前下班。"
+    )
 }
 
 struct OvertimeAvailability: Equatable {
@@ -659,6 +909,18 @@ struct OvertimeAvailability: Equatable {
         canStart: false,
         shortMessage: "加班中",
         helpMessage: "已有进行中的加班记录，可先撤回。"
+    )
+
+    static let alreadyClockedOut = OvertimeAvailability(
+        canStart: false,
+        shortMessage: "已提前下班",
+        helpMessage: "该工作日已有提前下班记录，不能再记录加班。"
+    )
+
+    static let alreadyRecorded = OvertimeAvailability(
+        canStart: false,
+        shortMessage: "已记录加班",
+        helpMessage: "该工作日已有加班记录，可在记录页编辑或延长。"
     )
 }
 
@@ -716,6 +978,10 @@ final class WorkSessionTracker: ObservableObject {
             return .alreadyClockedOut
         }
 
+        if latestOvertimeSession(for: window.workday, calendar: calendar) != nil {
+            return .alreadyOvertime
+        }
+
         return .available
     }
 
@@ -731,6 +997,14 @@ final class WorkSessionTracker: ObservableObject {
         let relevantWorkday = SalaryWorkTimeline.relevantWorkday(for: now, config: config, calendar: calendar)
         guard calendar.isDate(relevantWorkday, inSameDayAs: window.workday) else {
             return .beforeWorkFinished
+        }
+
+        if clockOutSession(for: window.workday, calendar: calendar) != nil {
+            return .alreadyClockedOut
+        }
+
+        if latestOvertimeSession(for: window.workday, calendar: calendar) != nil {
+            return .alreadyRecorded
         }
 
         return .available
@@ -754,6 +1028,43 @@ final class WorkSessionTracker: ObservableObject {
     }
 
     @discardableResult
+    func addClockOutSession(clockOutAt: Date, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        guard clockOutValidationMessage(clockOutAt: clockOutAt, now: now, config: config, calendar: calendar) == nil,
+              let window = SalaryWorkTimeline.activeWindow(containing: clockOutAt, config: config, calendar: calendar) else {
+            return false
+        }
+
+        clockOutSessions.append(
+            ClockOutSession(
+                workday: calendar.startOfDay(for: window.workday),
+                start: clockOutAt,
+                end: window.end
+            )
+        )
+        clockOutSessions.sort { $0.start < $1.start }
+        return true
+    }
+
+    @discardableResult
+    func updateClockOutSession(id: UUID, clockOutAt: Date, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        guard clockOutValidationMessage(clockOutAt: clockOutAt, now: now, config: config, calendar: calendar, excluding: id) == nil,
+              let index = clockOutSessions.firstIndex(where: { $0.id == id }),
+              let window = SalaryWorkTimeline.activeWindow(containing: clockOutAt, config: config, calendar: calendar) else {
+            return false
+        }
+
+        var updated = clockOutSessions
+        updated[index] = ClockOutSession(
+            id: id,
+            workday: calendar.startOfDay(for: window.workday),
+            start: clockOutAt,
+            end: window.end
+        )
+        clockOutSessions = updated.sorted { $0.start < $1.start }
+        return true
+    }
+
+    @discardableResult
     func undoClockOut(for workday: Date, calendar: Calendar = .current) -> Bool {
         let day = calendar.startOfDay(for: workday)
         guard let index = clockOutSessions.lastIndex(where: { calendar.isDate($0.workday, inSameDayAs: day) }) else {
@@ -764,16 +1075,49 @@ final class WorkSessionTracker: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func deleteClockOutSessions(ids: Set<UUID>) -> Int {
+        guard !ids.isEmpty else { return 0 }
+
+        let originalCount = clockOutSessions.count
+        let updated = clockOutSessions.filter { !ids.contains($0.id) }
+        guard updated.count != originalCount else { return 0 }
+
+        clockOutSessions = updated
+        return originalCount - updated.count
+    }
+
     func startOvertime(minutes: Int, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) {
         let normalizedMinutes = minutes
         guard normalizedMinutes > 0 else {
             return
         }
 
+        guard let window = SalaryWorkTimeline.latestFinishedWindow(endingAtOrBefore: now, config: config, calendar: calendar),
+              clockOutSession(for: window.workday, calendar: calendar) == nil else {
+            return
+        }
+
+        if let existing = latestOvertimeSession(for: window.workday, calendar: calendar) {
+            let base = max(existing.end, now)
+            guard let extendedEnd = calendar.date(byAdding: .minute, value: normalizedMinutes, to: base),
+                  extendedEnd > existing.end,
+                  Self.overtimeEndsBeforeNextWorkWindow(end: extendedEnd, after: window, config: config, calendar: calendar) else {
+                return
+            }
+            upsertOvertimeSession(
+                workday: window.workday,
+                start: existing.start,
+                end: extendedEnd,
+                calendar: calendar
+            )
+            return
+        }
+
         guard overtimeAvailability(now: now, config: config, calendar: calendar).canStart,
-              let window = SalaryWorkTimeline.latestFinishedWindow(endingAtOrBefore: now, config: config, calendar: calendar),
               let end = calendar.date(byAdding: .minute, value: normalizedMinutes, to: now),
-              end > now else {
+              end > now,
+              Self.overtimeEndsBeforeNextWorkWindow(end: end, after: window, config: config, calendar: calendar) else {
             return
         }
 
@@ -785,6 +1129,139 @@ final class WorkSessionTracker: ObservableObject {
             )
         )
         overtimeSessions.sort { $0.start < $1.start }
+    }
+
+    @discardableResult
+    func addOvertimeSession(workday: Date, durationMinutes: Int, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        guard overtimeValidationMessage(workday: workday, durationMinutes: durationMinutes, now: now, config: config, calendar: calendar) == nil,
+              let window = SalaryWorkTimeline.workWindow(startingOn: workday, config: config, calendar: calendar),
+              let end = calendar.date(byAdding: .minute, value: durationMinutes, to: window.end) else {
+            return false
+        }
+
+        upsertOvertimeSession(
+            workday: window.workday,
+            start: window.end,
+            end: end,
+            calendar: calendar
+        )
+        return true
+    }
+
+    @discardableResult
+    func updateOvertimeSession(id: UUID, workday: Date, durationMinutes: Int, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> Bool {
+        guard overtimeValidationMessage(workday: workday, durationMinutes: durationMinutes, now: now, config: config, calendar: calendar, excluding: id) == nil,
+              overtimeSessions.contains(where: { $0.id == id }),
+              let window = SalaryWorkTimeline.workWindow(startingOn: workday, config: config, calendar: calendar),
+              let end = calendar.date(byAdding: .minute, value: durationMinutes, to: window.end) else {
+            return false
+        }
+
+        upsertOvertimeSession(
+            id: id,
+            workday: calendar.startOfDay(for: window.workday),
+            start: window.end,
+            end: end,
+            replacing: id,
+            calendar: calendar
+        )
+        return true
+    }
+
+    func clockOutValidationMessage(clockOutAt: Date, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current, excluding id: UUID? = nil) -> String? {
+        if let message = Self.clockOutValidationMessage(clockOutAt: clockOutAt, now: now, config: config, calendar: calendar) {
+            return message
+        }
+
+        guard let window = SalaryWorkTimeline.activeWindow(containing: clockOutAt, config: config, calendar: calendar) else {
+            return "实际下班时间必须在有效工作窗口内"
+        }
+
+        let day = calendar.startOfDay(for: window.workday)
+        if clockOutSession(for: day, excluding: id, calendar: calendar) != nil {
+            return "该工作日已有提前下班记录"
+        }
+
+        if latestOvertimeSession(for: day, calendar: calendar) != nil {
+            return "该工作日已有加班记录，不能再记录提前下班"
+        }
+
+        return nil
+    }
+
+    func overtimeValidationMessage(workday: Date, durationMinutes: Int, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current, excluding id: UUID? = nil) -> String? {
+        if let message = Self.overtimeValidationMessage(workday: workday, durationMinutes: durationMinutes, now: now, config: config, calendar: calendar) {
+            return message
+        }
+
+        let day = calendar.startOfDay(for: workday)
+        guard let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar),
+              let end = calendar.date(byAdding: .minute, value: durationMinutes, to: window.end) else {
+            return "加班日期必须是有效工作日"
+        }
+
+        if clockOutSession(for: window.workday, calendar: calendar) != nil {
+            return "该工作日已有提前下班记录，不能再记录加班"
+        }
+
+        let existing = overtimeSessions(on: window.workday, excluding: id, calendar: calendar)
+        if let latestEnd = existing.map(\.end).max(),
+           end <= latestEnd {
+            return "该工作日已有不短于当前时长的加班记录"
+        }
+
+        return nil
+    }
+
+    static func clockOutValidationMessage(clockOutAt: Date, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> String? {
+        guard clockOutAt <= now else {
+            return "实际下班时间不能超过当前时间"
+        }
+
+        guard let window = SalaryWorkTimeline.activeWindow(containing: clockOutAt, config: config, calendar: calendar) else {
+            return "实际下班时间必须在有效工作窗口内"
+        }
+
+        guard clockOutAt < window.end else {
+            return "实际下班时间必须早于当天应下班时间"
+        }
+
+        return nil
+    }
+
+    static func overtimeValidationMessage(workday: Date, durationMinutes: Int, now: Date = Date(), config: SalaryConfig, calendar: Calendar = .current) -> String? {
+        let day = calendar.startOfDay(for: workday)
+
+        guard durationMinutes > 0 else {
+            return "加班时长必须大于 0"
+        }
+
+        guard let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar) else {
+            return "加班日期必须是有效工作日"
+        }
+
+        guard let end = calendar.date(byAdding: .minute, value: durationMinutes, to: window.end),
+              end > window.end else {
+            return "加班结束时间必须晚于当天应下班时间"
+        }
+
+        let isToday = calendar.isDate(window.workday, inSameDayAs: now)
+        guard end <= now || isToday else {
+            return "只能提前预定当天加班"
+        }
+
+        guard overtimeEndsBeforeNextWorkWindow(end: end, after: window, config: config, calendar: calendar) else {
+            return "加班结束时间不能进入下一次上班窗口"
+        }
+
+        return nil
+    }
+
+    private static func overtimeEndsBeforeNextWorkWindow(end: Date, after window: SalaryWorkWindow, config: SalaryConfig, calendar: Calendar) -> Bool {
+        guard let nextWindow = SalaryWorkTimeline.nextWorkWindow(startingAtOrAfter: window.end, config: config, calendar: calendar) else {
+            return true
+        }
+        return end <= nextWindow.start
     }
 
     @discardableResult
@@ -814,14 +1291,88 @@ final class WorkSessionTracker: ObservableObject {
         return true
     }
 
+    @discardableResult
+    func deleteOvertimeSessions(ids: Set<UUID>) -> Int {
+        guard !ids.isEmpty else { return 0 }
+
+        let originalCount = overtimeSessions.count
+        let updated = overtimeSessions.filter { !ids.contains($0.id) }
+        guard updated.count != originalCount else { return 0 }
+
+        overtimeSessions = updated
+        return originalCount - updated.count
+    }
+
+    @discardableResult
+    func deleteRecords(ids: Set<WorkSessionRecordIdentifier>) -> Int {
+        guard !ids.isEmpty else { return 0 }
+
+        let clockOutIDs = Set(ids.compactMap { $0.kind == .clockOut ? $0.id : nil })
+        let overtimeIDs = Set(ids.compactMap { $0.kind == .overtime ? $0.id : nil })
+        return deleteClockOutSessions(ids: clockOutIDs) + deleteOvertimeSessions(ids: overtimeIDs)
+    }
+
     func clockOutSession(for workday: Date, calendar: Calendar = .current) -> ClockOutSession? {
+        clockOutSession(for: workday, excluding: nil, calendar: calendar)
+    }
+
+    private func clockOutSession(for workday: Date, excluding id: UUID?, calendar: Calendar) -> ClockOutSession? {
         let day = calendar.startOfDay(for: workday)
-        return clockOutSessions.last { calendar.isDate($0.workday, inSameDayAs: day) }
+        return clockOutSessions.last { session in
+            calendar.isDate(session.workday, inSameDayAs: day) && session.id != id
+        }
     }
 
     func latestOvertimeSession(for workday: Date, calendar: Calendar = .current) -> OvertimeSession? {
+        latestOvertimeSession(for: workday, excluding: nil, calendar: calendar)
+    }
+
+    private func latestOvertimeSession(for workday: Date, excluding id: UUID?, calendar: Calendar) -> OvertimeSession? {
+        overtimeSessions(on: workday, excluding: id, calendar: calendar).max { lhs, rhs in
+            if lhs.end == rhs.end {
+                return lhs.start < rhs.start
+            }
+            return lhs.end < rhs.end
+        }
+    }
+
+    private func overtimeSessions(on workday: Date, excluding id: UUID?, calendar: Calendar) -> [OvertimeSession] {
         let day = calendar.startOfDay(for: workday)
-        return overtimeSessions.last { calendar.isDate($0.workday, inSameDayAs: day) }
+        return overtimeSessions.filter { session in
+            calendar.isDate(session.workday, inSameDayAs: day) && session.id != id
+        }
+    }
+
+    private func upsertOvertimeSession(
+        id preferredID: UUID? = nil,
+        workday: Date,
+        start: Date,
+        end: Date,
+        replacing replacedID: UUID? = nil,
+        calendar: Calendar
+    ) {
+        let day = calendar.startOfDay(for: workday)
+        let existingForDay = overtimeSessions(on: day, excluding: replacedID, calendar: calendar)
+        let mergedID = preferredID ?? existingForDay.first?.id ?? UUID()
+        let mergedStart = ([start] + existingForDay.map(\.start)).min() ?? start
+        let mergedEnd = ([end] + existingForDay.map(\.end)).max() ?? end
+
+        var updated = overtimeSessions.filter { session in
+            if let replacedID, session.id == replacedID {
+                return false
+            }
+            return !calendar.isDate(session.workday, inSameDayAs: day)
+        }
+
+        updated.append(
+            OvertimeSession(
+                id: mergedID,
+                workday: day,
+                start: mergedStart,
+                end: mergedEnd
+            )
+        )
+        overtimeSessions = updated.sorted { $0.start < $1.start }
     }
 
     func currentSummary(config: SalaryConfig, now: Date = Date(), calendar: Calendar = .current) -> WorkSessionDailySummary {
@@ -860,6 +1411,7 @@ final class WorkSessionTracker: ObservableObject {
             records.append(
                 WorkSessionRecordSummary(
                     id: "clockOut-\(session.id.uuidString)",
+                    recordIdentifier: WorkSessionRecordIdentifier(kind: .clockOut, id: session.id),
                     kind: .clockOut,
                     workday: calendar.startOfDay(for: session.workday),
                     start: session.start,
@@ -876,6 +1428,7 @@ final class WorkSessionTracker: ObservableObject {
             records.append(
                 WorkSessionRecordSummary(
                     id: "overtime-\(session.id.uuidString)",
+                    recordIdentifier: WorkSessionRecordIdentifier(kind: .overtime, id: session.id),
                     kind: .overtime,
                     workday: calendar.startOfDay(for: session.workday),
                     start: session.start,

@@ -107,6 +107,7 @@ private struct OffTaskHistoryYear: Identifiable {
     let title: String
     let monthCount: Int
     let paidSeconds: TimeInterval
+    let elapsedPaidSeconds: TimeInterval
     let amount: Double
     let recordCount: Int
     let dayCount: Int
@@ -117,6 +118,7 @@ private struct OffTaskHistoryMonth: Identifiable {
     let title: String
     let dayCount: Int
     let paidSeconds: TimeInterval
+    let elapsedPaidSeconds: TimeInterval
     let amount: Double
     let recordCount: Int
 }
@@ -126,6 +128,7 @@ private struct OffTaskHistoryDay: Identifiable {
     let title: String
     let summaries: [OffTaskSessionSummary]
     let paidSeconds: TimeInterval
+    let elapsedPaidSeconds: TimeInterval
     let amount: Double
 }
 
@@ -134,6 +137,74 @@ private struct OffTaskDisplayPeriod: Identifiable {
     let title: String
     let rangeText: String
     let summary: OffTaskAggregateSummary
+    let denominatorPaidSeconds: TimeInterval
+}
+
+private struct OffTaskPaidTimeContext {
+    let calendar: Calendar
+    let availableEndExclusive: Date
+    let daySeconds: [Date: TimeInterval]
+
+    func elapsedSeconds(from start: Date, toExclusive endExclusive: Date) -> TimeInterval {
+        let startDay = calendar.startOfDay(for: start)
+        let cappedEnd = min(calendar.startOfDay(for: endExclusive), availableEndExclusive)
+        guard cappedEnd > startDay else { return 0 }
+
+        var total: TimeInterval = 0
+        var cursor = startDay
+        while cursor < cappedEnd {
+            total += daySeconds[cursor] ?? 0
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else {
+                break
+            }
+            cursor = next
+        }
+        return total
+    }
+
+    static func make(from start: Date, toExclusive endExclusive: Date, now: Date, config: SalaryConfig, calendar: Calendar = .current) -> OffTaskPaidTimeContext {
+        let startDay = calendar.startOfDay(for: start)
+        let dayAfterNow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? calendar.startOfDay(for: now)
+        let cappedEnd = min(max(endExclusive, startDay), dayAfterNow)
+        guard cappedEnd > startDay else {
+            return OffTaskPaidTimeContext(calendar: calendar, availableEndExclusive: cappedEnd, daySeconds: [:])
+        }
+
+        var result: [Date: TimeInterval] = [:]
+        var cursor = startDay
+        while cursor < cappedEnd {
+            if let window = SalaryWorkTimeline.workWindow(startingOn: cursor, config: config, calendar: calendar),
+               now > window.start {
+                let elapsedEnd = min(now, window.end)
+                result[window.workday] = SalaryWorkTimeline.paidOverlapSeconds(
+                    from: window.start,
+                    to: elapsedEnd,
+                    in: window,
+                    config: config,
+                    calendar: calendar
+                )
+            }
+
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else {
+                break
+            }
+            cursor = next
+        }
+
+        return OffTaskPaidTimeContext(calendar: calendar, availableEndExclusive: cappedEnd, daySeconds: result)
+    }
+}
+
+private struct OffTaskBatchDeleteRequest {
+    let title: String
+    let message: String
+    let sessionIDs: Set<UUID>
+}
+
+private struct WorkSessionBatchDeleteRequest {
+    let title: String
+    let message: String
+    let recordIDs: Set<WorkSessionRecordIdentifier>
 }
 
 private struct WorkSessionDisplayPeriod: Identifiable {
@@ -265,57 +336,399 @@ private struct SettingsColorSwatchButton: View {
     }
 }
 
-private struct SecondPrecisionDateTimePicker: View {
-    let title: String
+private enum RecordTimeInputMetrics {
+    static let fieldWidth: CGFloat = 156
+    static let fieldHeight: CGFloat = 30
+    static let numberWidth: CGFloat = 42
+    static let yearWidth: CGFloat = 54
+    static let shortDateWidth: CGFloat = 26
+}
+
+private enum RecordRowActionMetrics {
+    static let editButtonWidth: CGFloat = 48
+    static let deleteButtonWidth: CGFloat = 24
+}
+
+private enum WorkSessionRecordTableMetrics {
+    static let spacing: CGFloat = 10
+    static let typeWidth: CGFloat = 72
+    static let rangeWidth: CGFloat = 156
+    static let durationWidth: CGFloat = 86
+    static let amountWidth: CGFloat = 96
+    static let statusWidth: CGFloat = 64
+}
+
+private struct RecordDateInput: View {
     @Binding var date: Date
+    var upperBound: Date?
+
+    private static let yearFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.minimum = NSNumber(value: 1)
+        formatter.maximum = NSNumber(value: 9999)
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    private static let twoDigitFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.minimum = NSNumber(value: 1)
+        formatter.maximum = NSNumber(value: 99)
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
 
     var body: some View {
-        HStack(spacing: 8) {
-            Text(title)
-                .frame(width: 42, alignment: .leading)
+        HStack(spacing: 4) {
+            TextField("", value: componentBinding(.year, range: 1...9999), formatter: Self.yearFormatter)
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .frame(width: RecordTimeInputMetrics.yearWidth)
 
-            DatePicker("", selection: $date, displayedComponents: .date)
-                .labelsHidden()
-                .frame(width: 130)
+            Text("/")
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .foregroundColor(.secondary)
 
-            timeStepper(component: .hour, range: 0...23, suffix: "时")
-            timeStepper(component: .minute, range: 0...59, suffix: "分")
-            timeStepper(component: .second, range: 0...59, suffix: "秒")
+            TextField("", value: componentBinding(.month, range: 1...12), formatter: Self.twoDigitFormatter)
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .frame(width: RecordTimeInputMetrics.shortDateWidth)
+
+            Text("/")
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .foregroundColor(.secondary)
+
+            TextField("", value: componentBinding(.day, range: dayRange), formatter: Self.twoDigitFormatter)
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .frame(width: RecordTimeInputMetrics.shortDateWidth)
         }
-        .controlSize(.small)
+        .timeInputFieldShell()
     }
 
-    private func timeStepper(component: Calendar.Component, range: ClosedRange<Int>, suffix: String) -> some View {
-        Stepper(value: componentBinding(component), in: range) {
-            Text("\(componentValue(component))\(suffix)")
-                .font(.caption.monospacedDigit())
-                .frame(width: 42, alignment: .leading)
-        }
-        .frame(width: 82)
+    private var dayRange: ClosedRange<Int> {
+        let calendar = Calendar.current
+        var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: clamped(date))
+        components.day = 1
+        let firstDay = calendar.date(from: components) ?? clamped(date)
+        let dayCount = calendar.range(of: .day, in: .month, for: firstDay)?.count ?? 31
+        return 1...dayCount
     }
 
-    private func componentBinding(_ component: Calendar.Component) -> Binding<Int> {
+    private func componentBinding(_ component: Calendar.Component, range: ClosedRange<Int>) -> Binding<Int> {
         Binding(
-            get: { componentValue(component) },
+            get: { Calendar.current.component(component, from: clamped(date)) },
             set: { newValue in
-                var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+                let boundedValue = min(max(newValue, range.lowerBound), range.upperBound)
+                let calendar = Calendar.current
+                var components = calendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
                 switch component {
-                case .hour:
-                    components.hour = newValue
-                case .minute:
-                    components.minute = newValue
-                case .second:
-                    components.second = newValue
+                case .year:
+                    components.year = boundedValue
+                case .month:
+                    components.month = boundedValue
+                case .day:
+                    components.day = boundedValue
                 default:
                     break
                 }
-                date = Calendar.current.date(from: components) ?? date
+                components.day = clampedDay(for: components, calendar: calendar)
+                date = clamped(calendar.date(from: components) ?? date)
             }
         )
     }
 
-    private func componentValue(_ component: Calendar.Component) -> Int {
-        Calendar.current.component(component, from: date)
+    private func clampedDay(for components: DateComponents, calendar: Calendar) -> Int {
+        var firstDayComponents = components
+        firstDayComponents.day = 1
+        let firstDay = calendar.date(from: firstDayComponents) ?? date
+        let dayCount = calendar.range(of: .day, in: .month, for: firstDay)?.count ?? 31
+        return min(dayCount, max(1, components.day ?? 1))
+    }
+
+    private func clamped(_ value: Date) -> Date {
+        guard let upperBound,
+              value > upperBound else {
+            return value
+        }
+        return upperBound
+    }
+}
+
+private struct SecondPrecisionDateTimePicker: View {
+    let title: String
+    @Binding var date: Date
+    var upperBound: Date?
+    private static let twoDigitFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.minimum = NSNumber(value: 0)
+        formatter.maximum = NSNumber(value: 99)
+        formatter.minimumIntegerDigits = 2
+        formatter.maximumIntegerDigits = 2
+        return formatter
+    }()
+    private static let secondFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.minimum = NSNumber(value: 0)
+        formatter.maximum = NSNumber(value: 59)
+        formatter.minimumIntegerDigits = 2
+        formatter.maximumIntegerDigits = 2
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+
+                Text(formattedSelection)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
+
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 10) {
+                    dateControls
+                    timeControls
+                    secondControls
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    dateControls
+                    timeControls
+                    secondControls
+                }
+            }
+        }
+        .controlSize(.regular)
+    }
+
+    private var dateControls: some View {
+        labeledPicker(title: "日期", icon: "calendar") {
+            RecordDateInput(date: $date, upperBound: upperBound)
+        }
+    }
+
+    private var timeControls: some View {
+        labeledPicker(title: "时分", icon: "clock") {
+            HStack(spacing: 6) {
+                timeComponentField(value: hourBinding)
+                Text(":")
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .foregroundColor(.secondary)
+                timeComponentField(value: minuteBinding)
+            }
+            .timeInputFieldShell()
+        }
+    }
+
+    private var secondControls: some View {
+        labeledPicker(title: "秒", icon: "timer") {
+            HStack(spacing: 5) {
+                TextField("", value: secondBinding, formatter: Self.secondFormatter)
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .frame(width: RecordTimeInputMetrics.numberWidth)
+                    .textFieldStyle(.plain)
+
+                Text("秒")
+                    .font(.caption.weight(.medium))
+                    .foregroundColor(.secondary)
+            }
+            .timeInputFieldShell()
+        }
+    }
+
+    private var hourBinding: Binding<Int> {
+        componentBinding(.hour, range: 0...23)
+    }
+
+    private var minuteBinding: Binding<Int> {
+        componentBinding(.minute, range: 0...59)
+    }
+
+    private var secondBinding: Binding<Int> {
+        componentBinding(.second, range: secondRange)
+    }
+
+    private func componentBinding(_ component: Calendar.Component, range: ClosedRange<Int>) -> Binding<Int> {
+        Binding(
+            get: { Calendar.current.component(component, from: clamped(date)) },
+            set: { newValue in
+                let boundedValue = min(max(newValue, range.lowerBound), range.upperBound)
+                var components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: date)
+                switch component {
+                case .hour:
+                    components.hour = boundedValue
+                case .minute:
+                    components.minute = boundedValue
+                case .second:
+                    components.second = boundedValue
+                default:
+                    break
+                }
+                date = clamped(Calendar.current.date(from: components) ?? date)
+            }
+        )
+    }
+
+    private var secondRange: ClosedRange<Int> {
+        let calendar = Calendar.current
+        let visibleDate = clamped(date)
+        let lowerBound = 0
+        var upperBound = 59
+
+        if let maxDate = self.upperBound,
+           calendar.isDate(visibleDate, equalTo: maxDate, toGranularity: .minute) {
+            upperBound = min(upperBound, calendar.component(.second, from: maxDate))
+        }
+
+        return lowerBound...max(lowerBound, upperBound)
+    }
+
+    private var formattedSelection: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年MM月dd日 HH:mm:ss"
+        return formatter.string(from: clamped(date))
+    }
+
+    private func labeledPicker<Content: View>(
+        title: String,
+        icon: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Label(title, systemImage: icon)
+                .font(.caption.weight(.medium))
+                .foregroundColor(.secondary)
+                .labelStyle(.titleAndIcon)
+
+            content()
+        }
+        .frame(width: RecordTimeInputMetrics.fieldWidth, alignment: .leading)
+    }
+
+    private func timeComponentField(value: Binding<Int>) -> some View {
+        TextField("", value: value, formatter: Self.twoDigitFormatter)
+            .font(.callout.monospacedDigit().weight(.semibold))
+            .multilineTextAlignment(.center)
+            .textFieldStyle(.plain)
+            .frame(width: RecordTimeInputMetrics.numberWidth)
+    }
+
+    private func clamped(_ value: Date) -> Date {
+        guard let upperBound,
+              value > upperBound else {
+            return value
+        }
+        return upperBound
+    }
+}
+
+private extension View {
+    func timeInputFieldShell() -> some View {
+        self
+            .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .frame(width: RecordTimeInputMetrics.fieldWidth, height: RecordTimeInputMetrics.fieldHeight, alignment: .center)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.72))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(nsColor: .separatorColor).opacity(0.36), lineWidth: 1)
+            )
+    }
+}
+
+private struct DurationMinutesInput: View {
+    let title: String
+    @Binding var totalMinutes: Int
+    var maximumMinutes = 14 * 24 * 60
+
+    private static let integerFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .none
+        formatter.minimum = NSNumber(value: 0)
+        formatter.maximum = NSNumber(value: 14 * 24 * 60)
+        formatter.maximumFractionDigits = 0
+        return formatter
+    }()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+
+                Text(durationText)
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 8) {
+                durationNumberField(value: hourBinding, suffix: "时")
+                durationNumberField(value: minuteBinding, suffix: "分")
+            }
+        }
+        .controlSize(.regular)
+    }
+
+    private var hourBinding: Binding<Int> {
+        Binding(
+            get: { max(0, min(maximumMinutes, totalMinutes)) / 60 },
+            set: { newValue in
+                let minutes = max(0, min(59, totalMinutes % 60))
+                totalMinutes = max(0, min(maximumMinutes, newValue * 60 + minutes))
+            }
+        )
+    }
+
+    private var minuteBinding: Binding<Int> {
+        Binding(
+            get: { max(0, min(59, totalMinutes % 60)) },
+            set: { newValue in
+                let hours = max(0, min(maximumMinutes, totalMinutes)) / 60
+                totalMinutes = max(0, min(maximumMinutes, hours * 60 + min(max(0, newValue), 59)))
+            }
+        )
+    }
+
+    private var durationText: String {
+        let minutes = max(0, min(maximumMinutes, totalMinutes))
+        let hours = minutes / 60
+        let remainder = minutes % 60
+        if hours > 0 {
+            return "\(hours)时\(remainder)分"
+        }
+        return "\(remainder)分"
+    }
+
+    private func durationNumberField(value: Binding<Int>, suffix: String) -> some View {
+        HStack(spacing: 5) {
+            TextField("", value: value, formatter: Self.integerFormatter)
+                .font(.callout.monospacedDigit().weight(.semibold))
+                .multilineTextAlignment(.center)
+                .textFieldStyle(.plain)
+                .frame(width: RecordTimeInputMetrics.numberWidth)
+
+            Text(suffix)
+                .font(.caption.weight(.medium))
+                .foregroundColor(.secondary)
+        }
+        .timeInputFieldShell()
     }
 }
 
@@ -335,6 +748,12 @@ private struct OffTaskSessionRowView: View {
                 editContent
             } else {
                 readOnlyContent
+                if let settlementNote = summary.settlementNote {
+                    Label(settlementNote, systemImage: "info.circle")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.vertical, 8)
@@ -390,6 +809,9 @@ private struct OffTaskSessionRowView: View {
                 if summary.isActive {
                     Label("进行中", systemImage: "record.circle")
                         .foregroundColor(.orange)
+                } else if !summary.countedInStatistics {
+                    Label("未计入", systemImage: "slash.circle")
+                        .foregroundColor(.secondary)
                 } else {
                     Text("已结束")
                         .foregroundColor(.secondary)
@@ -397,14 +819,20 @@ private struct OffTaskSessionRowView: View {
             }
             .font(.caption)
             .frame(width: 64, alignment: .leading)
+            .help(summary.settlementNote ?? "")
 
             Spacer(minLength: 0)
 
-            Button("编辑") {
+            Button {
                 resetEditingDates()
                 isEditing = true
+            } label: {
+                Text("编辑")
+                    .lineLimit(1)
+                    .frame(minWidth: RecordRowActionMetrics.editButtonWidth)
             }
             .controlSize(.small)
+            .fixedSize()
             .help(summary.isActive ? "编辑进行中记录的开始时间" : "编辑开始和结束时间")
 
             Button(role: .destructive) {
@@ -412,6 +840,7 @@ private struct OffTaskSessionRowView: View {
             } label: {
                 Image(systemName: "trash")
                     .font(.system(size: 11, weight: .semibold))
+                    .frame(width: RecordRowActionMetrics.deleteButtonWidth)
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
@@ -420,18 +849,19 @@ private struct OffTaskSessionRowView: View {
     }
 
     private var editContent: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            SecondPrecisionDateTimePicker(title: "开始", date: $startDate)
+        let currentValidation = editingValidationMessage()
+        return VStack(alignment: .leading, spacing: 8) {
+            SecondPrecisionDateTimePicker(title: "开始", date: $startDate, upperBound: Date())
 
             if summary.isActive {
                 Label("进行中的记录会保持开启，只调整开始时间。", systemImage: "record.circle")
                     .font(.caption)
                     .foregroundColor(.secondary)
             } else {
-                SecondPrecisionDateTimePicker(title: "结束", date: $endDate)
+                SecondPrecisionDateTimePicker(title: "结束", date: $endDate, upperBound: Date())
             }
 
-            if let validationMessage {
+            if let validationMessage = currentValidation ?? validationMessage {
                 Label(validationMessage, systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundColor(.orange)
@@ -456,41 +886,44 @@ private struct OffTaskSessionRowView: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .controlSize(.small)
+                .disabled(currentValidation != nil)
             }
         }
     }
 
     private func save() {
         let updatedEnd = summary.isActive ? nil : endDate
-        if summary.isActive {
-            guard startDate < Date() else {
-                validationMessage = "开始时间必须早于当前时间"
-                return
-            }
-            guard let activeWindow = SalaryWorkTimeline.activeWindow(containing: Date(), config: config),
-                  startDate >= activeWindow.start,
-                  startDate < activeWindow.end else {
-                validationMessage = "开始时间必须在当前工作窗口内"
-                return
-            }
-            guard SalaryWorkTimeline.paidInterval(containing: startDate, in: activeWindow, config: config) != nil else {
-                validationMessage = "开始时间必须在计薪区间内"
-                return
-            }
-        } else {
-            guard endDate > startDate else {
-                validationMessage = "结束时间必须晚于开始时间"
-                return
-            }
+        if let message = editingValidationMessage() {
+            validationMessage = message
+            return
         }
 
-        guard tracker.updateSessionTimeRange(id: summary.id, start: startDate, end: updatedEnd) else {
+        guard tracker.updateSessionTimeRange(id: summary.id, start: startDate, end: updatedEnd, config: config) else {
             validationMessage = "保存失败，请检查时间范围"
             return
         }
 
         validationMessage = nil
         isEditing = false
+    }
+
+    private func editingValidationMessage() -> String? {
+        let now = Date()
+        if summary.isActive {
+            guard startDate < now else {
+                return "开始时间必须早于当前时间"
+            }
+
+            guard let currentWindow = SalaryWorkTimeline.activeWindow(containing: now, config: config),
+                  startDate >= currentWindow.start,
+                  startDate < currentWindow.end else {
+                return "开始时间必须在当前工作窗口内"
+            }
+
+            return nil
+        }
+
+        return OffTaskTracker.sessionValidationMessage(start: startDate, end: endDate, now: now, config: config)
     }
 
     private func resetEditingDates() {
@@ -537,6 +970,581 @@ private struct OffTaskSessionRowView: View {
     }
 }
 
+private struct WorkSessionRecordRowView: View {
+    let summary: WorkSessionRecordSummary
+    let config: SalaryConfig
+    @ObservedObject private var tracker = WorkSessionTracker.shared
+    @State private var isEditing = false
+    @State private var clockOutAt = Date()
+    @State private var overtimeWorkday = Date()
+    @State private var overtimeMinutes = 60
+    @State private var validationMessage: String?
+    @State private var showsDeleteAlert = false
+
+    private var tint: Color {
+        summary.kind == .clockOut ? .green : .indigo
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if isEditing {
+                editContent
+            } else {
+                readOnlyContent
+            }
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.34), lineWidth: 1)
+        )
+        .onAppear {
+            resetEditingValues()
+        }
+        .onChange(of: summary) { _, _ in
+            if !isEditing {
+                resetEditingValues()
+            }
+        }
+        .alert("删除这条记录？", isPresented: $showsDeleteAlert) {
+            Button("删除", role: .destructive) {
+                tracker.deleteRecords(ids: Set([summary.recordIdentifier]))
+            }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("删除后无法恢复，本条记录对应的金额和时长会立即从统计中移除。")
+        }
+    }
+
+    private var readOnlyContent: some View {
+        HStack(spacing: WorkSessionRecordTableMetrics.spacing) {
+            Text(summary.kind.title)
+                .font(.caption.weight(.semibold))
+                .foregroundColor(tint)
+                .frame(width: WorkSessionRecordTableMetrics.typeWidth, alignment: .leading)
+
+            Text(formatRange(start: summary.start, end: summary.end))
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .frame(width: WorkSessionRecordTableMetrics.rangeWidth, alignment: .leading)
+
+            Text(formatDuration(summary.seconds))
+                .font(.caption.monospacedDigit())
+                .frame(width: WorkSessionRecordTableMetrics.durationWidth, alignment: .leading)
+
+            Text(formatMoney(summary.amount))
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundColor(tint)
+                .frame(width: WorkSessionRecordTableMetrics.amountWidth, alignment: .leading)
+
+            Text(summary.isActive ? "进行中" : "已完成")
+                .font(.caption2)
+                .foregroundColor(summary.isActive ? tint : .secondary)
+                .frame(width: WorkSessionRecordTableMetrics.statusWidth, alignment: .leading)
+
+            Spacer(minLength: 0)
+
+            Button {
+                resetEditingValues()
+                validationMessage = nil
+                isEditing = true
+            } label: {
+                Text("编辑")
+                    .lineLimit(1)
+                    .frame(minWidth: RecordRowActionMetrics.editButtonWidth)
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .help("编辑\(summary.kind.title)记录")
+
+            Button(role: .destructive) {
+                showsDeleteAlert = true
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11, weight: .semibold))
+                    .frame(width: RecordRowActionMetrics.deleteButtonWidth)
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .help("删除记录")
+        }
+    }
+
+    private var editContent: some View {
+        let currentValidation = editingValidationMessage()
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: summary.kind == .clockOut ? "checkmark.circle.fill" : "plus.circle.fill")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(tint)
+                    .frame(width: 18)
+
+                Text("编辑\(summary.kind.title)记录")
+                    .font(.callout.weight(.semibold))
+
+                Spacer()
+            }
+
+            if summary.kind == .clockOut {
+                SecondPrecisionDateTimePicker(title: "实际下班时间", date: $clockOutAt, upperBound: Date())
+                boundaryNote(clockOutBoundaryText())
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Text("加班日期")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        Text(formatDate(Calendar.current.startOfDay(for: overtimeWorkday)))
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                    }
+
+                    RecordDateInput(date: overtimeWorkdayBinding, upperBound: Date())
+                }
+
+                DurationMinutesInput(title: "加班时长", totalMinutes: $overtimeMinutes)
+                boundaryNote(overtimeBoundaryText())
+            }
+
+            if let validationMessage = currentValidation ?? validationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            HStack {
+                Text("保存后会按当前薪资和计薪规则重算金额与时长。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("取消") {
+                    validationMessage = nil
+                    isEditing = false
+                    resetEditingValues()
+                }
+                .controlSize(.small)
+
+                Button("保存") {
+                    save()
+                }
+                .keyboardShortcut(.defaultAction)
+                .controlSize(.small)
+                .disabled(currentValidation != nil)
+            }
+        }
+    }
+
+    private var overtimeWorkdayBinding: Binding<Date> {
+        Binding(
+            get: { Calendar.current.startOfDay(for: overtimeWorkday) },
+            set: { overtimeWorkday = Calendar.current.startOfDay(for: $0) }
+        )
+    }
+
+    private func boundaryNote(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+
+            Text(text)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func clockOutBoundaryText(calendar: Calendar = .current) -> String {
+        guard let window = SalaryWorkTimeline.activeWindow(containing: clockOutAt, config: config, calendar: calendar) else {
+            return "所选时间不在有效工作窗口内，无法推算当天应下班时间。"
+        }
+        return "将 \(formatDate(window.workday)) 改为 \(formatClock(clockOutAt)) 下班。"
+    }
+
+    private func overtimeBoundaryText(calendar: Calendar = .current) -> String {
+        let workday = calendar.startOfDay(for: overtimeWorkday)
+        guard let window = SalaryWorkTimeline.workWindow(startingOn: workday, config: config, calendar: calendar) else {
+            return "所选日期没有有效工作窗口，无法推算加班开始时间。"
+        }
+        let end = calendar.date(byAdding: .minute, value: max(0, overtimeMinutes), to: window.end) ?? window.end
+        if let nextWindow = SalaryWorkTimeline.nextWorkWindow(startingAtOrAfter: window.end, config: config, calendar: calendar) {
+            return "将记录 \(formatDate(window.workday)) 应下班 \(formatClock(window.end)) 后加班到 \(formatBoundary(end, workday: window.workday))；下次上班 \(formatBoundary(nextWindow.start, workday: window.workday)) 前需要结束。"
+        }
+        return "将记录 \(formatDate(window.workday)) 应下班 \(formatClock(window.end)) 后加班到 \(formatBoundary(end, workday: window.workday))。"
+    }
+
+    private func editingValidationMessage(calendar: Calendar = .current) -> String? {
+        switch summary.kind {
+        case .clockOut:
+            return tracker.clockOutValidationMessage(clockOutAt: clockOutAt, now: Date(), config: config, calendar: calendar, excluding: summary.recordIdentifier.id)
+        case .overtime:
+            return tracker.overtimeValidationMessage(workday: overtimeWorkday, durationMinutes: overtimeMinutes, now: Date(), config: config, calendar: calendar, excluding: summary.recordIdentifier.id)
+        }
+    }
+
+    private func save() {
+        if let message = editingValidationMessage() {
+            validationMessage = message
+            return
+        }
+
+        let saved: Bool
+        switch summary.kind {
+        case .clockOut:
+            saved = tracker.updateClockOutSession(
+                id: summary.recordIdentifier.id,
+                clockOutAt: clockOutAt,
+                config: config
+            )
+        case .overtime:
+            saved = tracker.updateOvertimeSession(
+                id: summary.recordIdentifier.id,
+                workday: overtimeWorkday,
+                durationMinutes: overtimeMinutes,
+                config: config
+            )
+        }
+
+        guard saved else {
+            validationMessage = "保存失败，请检查时间范围"
+            return
+        }
+
+        validationMessage = nil
+        isEditing = false
+    }
+
+    private func resetEditingValues(calendar: Calendar = .current) {
+        clockOutAt = summary.start
+        overtimeWorkday = calendar.startOfDay(for: summary.workday)
+        overtimeMinutes = inferredOvertimeMinutes(calendar: calendar)
+    }
+
+    private func inferredOvertimeMinutes(calendar: Calendar) -> Int {
+        guard summary.kind == .overtime else { return 60 }
+        let baseStart = SalaryWorkTimeline.workWindow(startingOn: summary.workday, config: config, calendar: calendar)?.end ?? summary.start
+        let minutes = Int((summary.end.timeIntervalSince(baseStart) / 60).rounded(.toNearestOrAwayFromZero))
+        return max(1, minutes)
+    }
+
+    private func formatRange(start: Date, end: Date) -> String {
+        if Calendar.current.isDate(start, inSameDayAs: end) {
+            return "\(formatClock(start)) - \(formatClock(end))"
+        }
+        return "\(formatDate(start)) \(formatClock(start)) - \(formatDate(end)) \(formatClock(end))"
+    }
+
+    private func formatBoundary(_ date: Date, workday: Date) -> String {
+        if Calendar.current.isDate(date, inSameDayAs: workday) {
+            return formatClock(date)
+        }
+        return "\(formatDate(date)) \(formatClock(date))"
+    }
+
+    private func formatDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy.MM.dd E"
+        return formatter.string(from: date)
+    }
+
+    private func formatClock(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func formatDuration(_ seconds: TimeInterval) -> String {
+        let totalSeconds = max(0, Int(seconds.rounded(.down)))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return "\(hours)时\(minutes)分\(seconds)秒"
+        }
+        if minutes > 0 {
+            return "\(minutes)分\(seconds)秒"
+        }
+        return "\(seconds)秒"
+    }
+
+    private func formatMoney(_ value: Double) -> String {
+        let amount = String(format: "%.\(config.displayDecimalPlaces)f", value)
+        return "¥\(amount)"
+    }
+}
+
+private struct OffTaskMergePreviewSheet: View {
+    let clusters: [OffTaskMergePreviewCluster]
+    let onCancel: () -> Void
+    let onMerge: () -> Void
+
+    private var originalRecordCount: Int {
+        clusters.reduce(0) { $0 + $1.originalSessions.count }
+    }
+
+    private var removedRecordCount: Int {
+        clusters.reduce(0) { $0 + $1.removedRecordCount }
+    }
+
+    private var dayCount: Int {
+        Set(clusters.map { offTaskDayKey($0.workday) }).count
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+                .padding(18)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 14) {
+                summaryStrip
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(clusters.sorted { lhs, rhs in
+                            if lhs.workday == rhs.workday {
+                                return lhs.mergedSession.start > rhs.mergedSession.start
+                            }
+                            return lhs.workday > rhs.workday
+                        }) { cluster in
+                            previewClusterCard(cluster)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .frame(maxHeight: .infinity)
+            }
+            .padding(18)
+
+            Divider()
+
+            HStack(spacing: 10) {
+                Text("合并只处理同一工作日内互相重叠的区间，不会合并首尾相接但未重叠的记录。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("取消") {
+                    onCancel()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button(role: .destructive) {
+                    onMerge()
+                } label: {
+                    Label("确认合并", systemImage: "arrow.triangle.merge")
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding(18)
+        }
+        .frame(width: 680, height: 560)
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.orange.opacity(0.14))
+                Image(systemName: "arrow.triangle.merge")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.orange)
+            }
+            .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("预览重叠摸鱼记录")
+                    .font(.title3.weight(.semibold))
+                Text("确认后会把下面这些重叠区间压成合并后的原始记录。")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+
+    private var summaryStrip: some View {
+        HStack(spacing: 10) {
+            previewMetric(title: "涉及天数", value: "\(dayCount)天")
+            previewMetric(title: "重叠组", value: "\(clusters.count)组")
+            previewMetric(title: "原始记录", value: "\(originalRecordCount)条")
+            previewMetric(title: "预计减少", value: "\(removedRecordCount)条")
+        }
+    }
+
+    private func previewMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text(value)
+                .font(.headline.monospacedDigit())
+                .lineLimit(1)
+        }
+        .padding(.vertical, 9)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color.orange.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color.orange.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func previewClusterCard(_ cluster: OffTaskMergePreviewCluster) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(formatWorkday(cluster.workday))
+                    .font(.callout.weight(.semibold))
+
+                Text("\(cluster.originalSessions.count) 条合并为 1 条")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Text("-\(cluster.removedRecordCount)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundColor(.orange)
+                    .padding(.vertical, 2)
+                    .padding(.horizontal, 7)
+                    .background(
+                        Capsule()
+                            .fill(Color.orange.opacity(0.12))
+                    )
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("原始重叠")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(.secondary)
+
+                ForEach(cluster.originalSessions) { session in
+                    HStack(spacing: 8) {
+                        Image(systemName: session.end == nil ? "record.circle" : "clock")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(session.end == nil ? .orange : .secondary)
+                            .frame(width: 14)
+
+                        Text(formatRange(session))
+                            .font(.caption.monospacedDigit())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+
+                        Spacer()
+
+                        Text(formatRawDuration(session))
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+            )
+
+            HStack(spacing: 8) {
+                Label("合并后", systemImage: "checkmark.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.orange)
+                    .frame(width: 64, alignment: .leading)
+
+                Text(formatRange(cluster.mergedSession))
+                    .font(.callout.monospacedDigit().weight(.semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                Spacer()
+
+                Text(formatRawDuration(cluster.mergedSession))
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(Color.orange.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(Color.orange.opacity(0.22), lineWidth: 1)
+            )
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(nsColor: .windowBackgroundColor).opacity(0.64))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(Color(nsColor: .separatorColor).opacity(0.34), lineWidth: 1)
+        )
+    }
+
+    private func formatRange(_ session: OffTaskSession) -> String {
+        let endText = session.end.map(formatDateTime) ?? "进行中"
+        return "\(formatDateTime(session.start)) - \(endText)"
+    }
+
+    private func formatRawDuration(_ session: OffTaskSession) -> String {
+        let end = session.end ?? Date()
+        let duration = max(0, end.timeIntervalSince(session.start))
+        let totalSeconds = Int(duration.rounded(.down))
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        if hours > 0 {
+            return "\(hours)时\(minutes)分\(seconds)秒"
+        }
+        if minutes > 0 {
+            return "\(minutes)分\(seconds)秒"
+        }
+        return "\(seconds)秒"
+    }
+
+    private func formatDateTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy.MM.dd HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func formatWorkday(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年MM月dd日 E"
+        return formatter.string(from: date)
+    }
+
+    private func offTaskDayKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
 /// 设置窗口主体。当前采用“左侧分类 + 右侧预加载页面”的结构，减少栏目切换时的重新创建成本。
 struct SettingsView: View {
     @ObservedObject var configManager = SalaryConfigManager.shared
@@ -564,6 +1572,19 @@ struct SettingsView: View {
     @State private var expandedWorkSessionHistoryMonths: Set<String> = []
     @State private var expandedWorkSessionHistoryDays: Set<String> = []
     @State private var dataTransferStatus: DataTransferStatus?
+    @State private var pendingOffTaskBatchDelete: OffTaskBatchDeleteRequest?
+    @State private var pendingWorkSessionBatchDelete: WorkSessionBatchDeleteRequest?
+    @State private var offTaskMergePreviewClusters: [OffTaskMergePreviewCluster] = []
+    @State private var showsOffTaskMergePreview = false
+    @State private var showsOffTaskManualForm = false
+    @State private var offTaskManualStartDate = Date().addingTimeInterval(-1800)
+    @State private var offTaskManualEndDate = Date()
+    @State private var offTaskManualValidationMessage: String?
+    @State private var showsWorkSessionManualForm = false
+    @State private var workSessionManualKind: WorkSessionRecordKind = .clockOut
+    @State private var workSessionManualStartDate = Date().addingTimeInterval(-1800)
+    @State private var workSessionManualOvertimeMinutes = 60
+    @State private var workSessionManualValidationMessage: String?
     private let sidebarWidthRange: ClosedRange<Double> = 168...310
     private static let settingsPageContentPadding: CGFloat = 24
 
@@ -617,6 +1638,71 @@ struct SettingsView: View {
         .onChange(of: isSalaryCycleStartDayFocused) { _, isFocused in
             if !isFocused {
                 commitSalaryCycleStartDayText()
+            }
+        }
+        .alert(
+            pendingOffTaskBatchDelete?.title ?? "删除摸鱼记录？",
+            isPresented: Binding(
+                get: { pendingOffTaskBatchDelete != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingOffTaskBatchDelete = nil
+                    }
+                }
+            )
+        ) {
+            Button("删除", role: .destructive) {
+                if let request = pendingOffTaskBatchDelete {
+                    offTaskTracker.deleteSessions(ids: request.sessionIDs)
+                }
+                pendingOffTaskBatchDelete = nil
+            }
+            Button("取消", role: .cancel) {
+                pendingOffTaskBatchDelete = nil
+            }
+        } message: {
+            Text(pendingOffTaskBatchDelete?.message ?? "")
+        }
+        .alert(
+            pendingWorkSessionBatchDelete?.title ?? "删除提前下班/加班记录？",
+            isPresented: Binding(
+                get: { pendingWorkSessionBatchDelete != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        pendingWorkSessionBatchDelete = nil
+                    }
+                }
+            )
+        ) {
+            Button("删除", role: .destructive) {
+                if let request = pendingWorkSessionBatchDelete {
+                    workSessionTracker.deleteRecords(ids: request.recordIDs)
+                }
+                pendingWorkSessionBatchDelete = nil
+            }
+            Button("取消", role: .cancel) {
+                pendingWorkSessionBatchDelete = nil
+            }
+        } message: {
+            Text(pendingWorkSessionBatchDelete?.message ?? "")
+        }
+        .sheet(isPresented: $showsOffTaskMergePreview) {
+            OffTaskMergePreviewSheet(
+                clusters: offTaskMergePreviewClusters,
+                onCancel: {
+                    offTaskMergePreviewClusters = []
+                    showsOffTaskMergePreview = false
+                },
+                onMerge: {
+                    offTaskTracker.mergeOverlappingSessionsByWorkday(config: configManager.config)
+                    offTaskMergePreviewClusters = []
+                    showsOffTaskMergePreview = false
+                }
+            )
+        }
+        .onChange(of: showsOffTaskMergePreview) { _, isPresented in
+            if !isPresented {
+                offTaskMergePreviewClusters = []
             }
         }
     }
@@ -2220,131 +3306,94 @@ struct SettingsView: View {
         let config = configManager.config
         let today = workSessionTracker.currentSummary(config: config)
         let displayPeriods = workSessionDisplayPeriods(config: config, today: today)
-        let clockOutAvailability = workSessionTracker.clockOutAvailability(config: config)
-        let overtimeAvailability = workSessionTracker.overtimeAvailability(config: config)
-        let hasClockOut = workSessionTracker.clockOutSession(for: today.workday) != nil
-        let hasOvertime = workSessionTracker.latestOvertimeSession(for: today.workday) != nil
 
-        return LazyVStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(workSessionStatusText(today))
-                                .font(.callout.weight(.semibold))
-                            Text(workSessionStatusDetail(today, clockOutAvailability: clockOutAvailability, overtimeAvailability: overtimeAvailability))
-                                .font(.caption)
-                                .monospacedDigit()
-                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                        }
-
-                        Spacer()
-
-                        HStack(spacing: 8) {
-                            Button {
-                                if hasClockOut {
-                                    workSessionTracker.undoClockOut(for: today.workday)
-                                } else {
-                                    if offTaskTracker.isActive {
-                                        offTaskTracker.stop()
-                                    }
-                                    workSessionTracker.clockOut(config: config)
-                                }
-                            } label: {
-                                Label(hasClockOut ? "撤回提前下班" : "提前下班", systemImage: hasClockOut ? "arrow.uturn.backward" : "checkmark.circle.fill")
-                            }
-                            .disabled(!hasClockOut && !clockOutAvailability.canClockOut)
-                            .help(hasClockOut ? "撤回今日提前下班记录。" : clockOutAvailability.helpMessage)
-                            .controlSize(.small)
-
-                            Button {
-                                workSessionTracker.undoLatestOvertime(config: config)
-                            } label: {
-                                Label("撤回加班", systemImage: "arrow.uturn.backward")
-                            }
-                            .disabled(!hasOvertime)
-                            .help("撤回最近一条今日加班记录。")
-                            .controlSize(.small)
-                        }
-                    }
-
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
-                        workSessionStatCard(title: "提前下班进账", value: formatMoney(today.clockOutAmount), tint: .green)
-                        workSessionStatCard(title: "提前下班时长", value: formatOffTaskDuration(today.clockOutSeconds), tint: .green)
-                        workSessionStatCard(title: "加班亏损", value: formatMoney(today.overtimeAmount), tint: .indigo)
-                        workSessionStatCard(title: "加班时长", value: formatOffTaskDuration(today.overtimeSeconds), tint: .indigo)
-                    }
-                }
-                .padding(12)
-            } label: {
+        return LazyVStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
                 Label("提前下班与加班", systemImage: "timer")
                     .font(.headline)
+
+                Spacer()
+
+                workSessionAddRecordButton(config: config)
             }
 
             GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if showsWorkSessionManualForm {
+                        manualWorkSessionRecordForm(config: config)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    recordSubsectionHeader(title: "数据概览", systemImage: "chart.bar.xaxis")
+
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), alignment: .leading, spacing: 10) {
                         ForEach(displayPeriods) { period in
                             workSessionPeriodCard(period)
                         }
                     }
+
+                    Divider()
+
+                    workSessionHistorySummarySection(config: config)
                 }
                 .padding(12)
-            } label: {
-                Label("提前下班 / 加班概览", systemImage: "chart.bar.xaxis")
-                    .font(.headline)
             }
-
-            workSessionHistorySummarySection(config: config)
         }
+    }
+
+    private func workSessionAddRecordButton(config: SalaryConfig) -> some View {
+        Button {
+            resetWorkSessionManualFormDates(config: config)
+            showsWorkSessionManualForm = true
+        } label: {
+            Label("新增记录", systemImage: "plus.circle")
+        }
+        .controlSize(.small)
     }
 
     private func workSessionHistorySummarySection(config: SalaryConfig) -> some View {
         let total = workSessionTracker.totalSummary(config: config)
         let summaries = workSessionTracker.recordSummaries(config: config)
         let historyYears = workSessionHistoryYears(from: summaries)
+        let historyDayCount = historyYears.reduce(0) { $0 + $1.dayCount }
 
-        return GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
-                    workSessionStatCard(title: "历史提前下班进账", value: formatMoney(total.clockOutAmount), tint: .green)
-                    workSessionStatCard(title: "历史提前下班时长", value: formatOffTaskDuration(total.clockOutSeconds), tint: .green)
-                    workSessionStatCard(title: "历史加班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
-                    workSessionStatCard(title: "历史加班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
-                }
+        return VStack(alignment: .leading, spacing: 12) {
+            workSessionHistoryHeader(total: total, dayCount: historyDayCount)
 
-                Divider()
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                workSessionStatCard(title: "历史提前下班进账", value: formatMoney(total.clockOutAmount), tint: .green)
+                workSessionStatCard(title: "历史提前下班时长", value: formatOffTaskDuration(total.clockOutSeconds), tint: .green)
+                workSessionStatCard(title: "历史加班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
+                workSessionStatCard(title: "历史加班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
+            }
 
-                HStack(spacing: 8) {
-                    Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.secondary)
-
-                    Spacer()
-
-                    offTaskHistoryPill("提前下班 \(total.clockOutCount)次")
-                    offTaskHistoryPill("加班 \(total.overtimeCount)次")
-                    offTaskHistoryPill("\(historyYears.reduce(0) { $0 + $1.dayCount })天")
-                }
-
-                if historyYears.isEmpty {
-                    Text("暂无提前下班或加班记录")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(historyYears) { year in
-                            workSessionHistoryYearDisclosure(year, summaries: summaries)
-                        }
+            if historyYears.isEmpty {
+                Text("暂无提前下班或加班记录")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(historyYears) { year in
+                        workSessionHistoryYearDisclosure(year, summaries: summaries, config: config)
                     }
                 }
             }
-            .padding(12)
-        } label: {
-            Label("提前下班 / 加班历史记录", systemImage: "tray.full")
-                .font(.headline)
         }
+    }
+
+    private func workSessionHistoryHeader(total: WorkSessionAggregateSummary, dayCount: Int) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Label("历史记录", systemImage: "tray.full")
+                .font(.headline)
+
+            Spacer()
+
+            offTaskHistoryPill("提前下班 \(total.clockOutCount)次")
+            offTaskHistoryPill("加班 \(total.overtimeCount)次")
+            offTaskHistoryPill("\(dayCount)天")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func workSessionDisplayPeriods(config: SalaryConfig, today: WorkSessionDailySummary) -> [WorkSessionDisplayPeriod] {
@@ -2434,7 +3483,7 @@ struct SettingsView: View {
             Text(value)
                 .font(.callout.weight(.semibold))
                 .monospacedDigit()
-                .lineLimit(1)
+                .lineLimit(2)
                 .minimumScaleFactor(0.72)
         }
     }
@@ -2508,32 +3557,40 @@ struct SettingsView: View {
         }
     }
 
-    private func workSessionHistoryYearDisclosure(_ year: WorkSessionHistoryYear, summaries: [WorkSessionRecordSummary]) -> some View {
+    private func workSessionHistoryYearDisclosure(_ year: WorkSessionHistoryYear, summaries: [WorkSessionRecordSummary], config: SalaryConfig) -> some View {
         let isExpanded = expandedWorkSessionHistoryYears.contains(year.id)
+        let yearSummaries = summaries.filter { summary in
+            offTaskYearKey(summary.workday) == year.id
+        }
 
         return VStack(alignment: .leading, spacing: 0) {
-            workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
-                toggleOffTaskHistoryExpansion(year.id, in: &expandedWorkSessionHistoryYears)
-            } label: {
-                workSessionHistoryGroupLabel(
-                    icon: "calendar",
-                    title: year.title,
-                    detail: "共计\(year.monthCount)月 | \(year.dayCount)天",
-                    recordCount: year.recordCount,
-                    seconds: year.seconds,
-                    clockOutAmount: year.clockOutAmount,
-                    overtimeAmount: year.overtimeAmount
+            HStack(spacing: 8) {
+                workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
+                    toggleOffTaskHistoryExpansion(year.id, in: &expandedWorkSessionHistoryYears)
+                } label: {
+                    workSessionHistoryGroupLabel(
+                        icon: "calendar",
+                        title: year.title,
+                        detail: "共计\(year.monthCount)月 | \(year.dayCount)天",
+                        recordCount: year.recordCount,
+                        seconds: year.seconds,
+                        clockOutAmount: year.clockOutAmount,
+                        overtimeAmount: year.overtimeAmount
+                    )
+                }
+
+                workSessionBatchDeleteButton(
+                    title: "删除\(year.title)提前下班/加班记录？",
+                    message: "将删除\(year.title)下全部 \(year.recordCount) 条提前下班/加班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
+                    summaries: yearSummaries
                 )
             }
 
             if isExpanded {
-                let yearSummaries = summaries.filter { summary in
-                    offTaskYearKey(summary.workday) == year.id
-                }
                 let months = workSessionHistoryMonths(from: yearSummaries)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(months) { month in
-                        workSessionHistoryMonthDisclosure(month, summaries: yearSummaries)
+                        workSessionHistoryMonthDisclosure(month, summaries: yearSummaries, config: config)
                     }
                 }
                 .padding(.top, 8)
@@ -2551,32 +3608,40 @@ struct SettingsView: View {
         )
     }
 
-    private func workSessionHistoryMonthDisclosure(_ month: WorkSessionHistoryMonth, summaries: [WorkSessionRecordSummary]) -> some View {
+    private func workSessionHistoryMonthDisclosure(_ month: WorkSessionHistoryMonth, summaries: [WorkSessionRecordSummary], config: SalaryConfig) -> some View {
         let isExpanded = expandedWorkSessionHistoryMonths.contains(month.id)
+        let monthSummaries = summaries.filter { summary in
+            offTaskMonthKey(summary.workday) == month.id
+        }
 
         return VStack(alignment: .leading, spacing: 0) {
-            workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
-                toggleOffTaskHistoryExpansion(month.id, in: &expandedWorkSessionHistoryMonths)
-            } label: {
-                workSessionHistoryGroupLabel(
-                    icon: "calendar.circle",
-                    title: month.title,
-                    detail: "共计\(month.dayCount)天",
-                    recordCount: month.recordCount,
-                    seconds: month.seconds,
-                    clockOutAmount: month.clockOutAmount,
-                    overtimeAmount: month.overtimeAmount
+            HStack(spacing: 8) {
+                workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
+                    toggleOffTaskHistoryExpansion(month.id, in: &expandedWorkSessionHistoryMonths)
+                } label: {
+                    workSessionHistoryGroupLabel(
+                        icon: "calendar.circle",
+                        title: month.title,
+                        detail: "共计\(month.dayCount)天",
+                        recordCount: month.recordCount,
+                        seconds: month.seconds,
+                        clockOutAmount: month.clockOutAmount,
+                        overtimeAmount: month.overtimeAmount
+                    )
+                }
+
+                workSessionBatchDeleteButton(
+                    title: "删除\(month.title)提前下班/加班记录？",
+                    message: "将删除\(month.title)下全部 \(month.recordCount) 条提前下班/加班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
+                    summaries: monthSummaries
                 )
             }
 
             if isExpanded {
-                let monthSummaries = summaries.filter { summary in
-                    offTaskMonthKey(summary.workday) == month.id
-                }
                 let days = workSessionHistoryDays(from: monthSummaries)
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(days) { day in
-                        workSessionHistoryDayDisclosure(day)
+                        workSessionHistoryDayDisclosure(day, config: config)
                     }
                 }
                 .padding(.top, 8)
@@ -2594,37 +3659,45 @@ struct SettingsView: View {
         )
     }
 
-    private func workSessionHistoryDayDisclosure(_ day: WorkSessionHistoryDay) -> some View {
+    private func workSessionHistoryDayDisclosure(_ day: WorkSessionHistoryDay, config: SalaryConfig) -> some View {
         let isExpanded = expandedWorkSessionHistoryDays.contains(day.id)
 
         return VStack(alignment: .leading, spacing: 0) {
-            workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
-                toggleOffTaskHistoryExpansion(day.id, in: &expandedWorkSessionHistoryDays)
-            } label: {
-                workSessionHistoryGroupLabel(
-                    icon: "calendar.day.timeline.left",
-                    title: day.title,
-                    detail: nil,
-                    recordCount: day.summaries.count,
-                    seconds: day.seconds,
-                    clockOutAmount: day.clockOutAmount,
-                    overtimeAmount: day.overtimeAmount
+            HStack(spacing: 8) {
+                workSessionHistoryDisclosureButton(isExpanded: isExpanded) {
+                    toggleOffTaskHistoryExpansion(day.id, in: &expandedWorkSessionHistoryDays)
+                } label: {
+                    workSessionHistoryGroupLabel(
+                        icon: "calendar.day.timeline.left",
+                        title: day.title,
+                        detail: nil,
+                        recordCount: day.summaries.count,
+                        seconds: day.seconds,
+                        clockOutAmount: day.clockOutAmount,
+                        overtimeAmount: day.overtimeAmount
+                    )
+                }
+
+                workSessionBatchDeleteButton(
+                    title: "删除\(day.title)提前下班/加班记录？",
+                    message: "将删除\(day.title)下全部 \(day.summaries.count) 条提前下班/加班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
+                    summaries: day.summaries
                 )
             }
 
             if isExpanded {
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
+                    HStack(spacing: WorkSessionRecordTableMetrics.spacing) {
                         Text("类型")
-                            .frame(width: 72, alignment: .leading)
+                            .frame(width: WorkSessionRecordTableMetrics.typeWidth, alignment: .leading)
                         Text("起止时间")
-                            .frame(width: 132, alignment: .leading)
+                            .frame(width: WorkSessionRecordTableMetrics.rangeWidth, alignment: .leading)
                         Text("时长")
-                            .frame(width: 86, alignment: .leading)
+                            .frame(width: WorkSessionRecordTableMetrics.durationWidth, alignment: .leading)
                         Text("金额")
-                            .frame(width: 96, alignment: .leading)
+                            .frame(width: WorkSessionRecordTableMetrics.amountWidth, alignment: .leading)
                         Text("状态")
-                            .frame(width: 64, alignment: .leading)
+                            .frame(width: WorkSessionRecordTableMetrics.statusWidth, alignment: .leading)
                         Spacer()
                     }
                     .font(.caption2.weight(.semibold))
@@ -2633,7 +3706,7 @@ struct SettingsView: View {
                     .padding(.top, 4)
 
                     ForEach(day.summaries) { summary in
-                        workSessionRecordRow(summary)
+                        WorkSessionRecordRowView(summary: summary, config: config)
                     }
                 }
                 .padding(.top, 8)
@@ -2678,6 +3751,28 @@ struct SettingsView: View {
         .help(isExpanded ? "收起记录" : "展开记录")
     }
 
+    private func workSessionBatchDeleteButton(
+        title: String,
+        message: String,
+        summaries: [WorkSessionRecordSummary]
+    ) -> some View {
+        Button(role: .destructive) {
+            pendingWorkSessionBatchDelete = WorkSessionBatchDeleteRequest(
+                title: title,
+                message: message,
+                recordIDs: Set(summaries.map(\.recordIdentifier))
+            )
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .disabled(summaries.isEmpty)
+        .help(title)
+    }
+
     private func workSessionHistoryGroupLabel(
         icon: String,
         title: String,
@@ -2715,162 +3810,514 @@ struct SettingsView: View {
         .foregroundColor(.primary)
     }
 
-    private func workSessionRecordRow(_ summary: WorkSessionRecordSummary) -> some View {
-        let tint: Color = summary.kind == .clockOut ? .green : .indigo
-
-        return HStack(spacing: 10) {
-            Label(summary.kind.title, systemImage: summary.kind == .clockOut ? "checkmark.circle.fill" : "plus.circle.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundColor(tint)
-                .frame(width: 72, alignment: .leading)
-
-            Text("\(formatWorkSessionClock(summary.start)) - \(formatWorkSessionClock(summary.end))")
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .frame(width: 132, alignment: .leading)
-
-            Text(formatOffTaskDuration(summary.seconds))
-                .font(.caption.monospacedDigit())
-                .frame(width: 86, alignment: .leading)
-
-            Text(formatMoney(summary.amount))
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundColor(tint)
-                .frame(width: 96, alignment: .leading)
-
-            Text(summary.isActive ? "进行中" : "已完成")
-                .font(.caption2)
-                .foregroundColor(summary.isActive ? tint : .secondary)
-                .frame(width: 64, alignment: .leading)
-
-            Spacer(minLength: 0)
+    private var manualOffTaskRecordForm: some View {
+        let config = configManager.config
+        let currentValidation = manualRangeValidationMessage(start: offTaskManualStartDate, end: offTaskManualEndDate, config: config)
+        let settlementNote = currentValidation == nil ? offTaskTracker.previewSessionSummary(
+            start: offTaskManualStartDate,
+            end: offTaskManualEndDate,
+            config: config
+        ).settlementNote : nil
+        return manualRecordForm(
+            title: "手动新增摸鱼记录",
+            icon: "fish",
+            tint: .orange,
+            startDate: $offTaskManualStartDate,
+            endDate: $offTaskManualEndDate,
+            validationMessage: currentValidation ?? offTaskManualValidationMessage,
+            settlementNote: settlementNote,
+            isSaveDisabled: currentValidation != nil,
+            onCancel: {
+                showsOffTaskManualForm = false
+                offTaskManualValidationMessage = nil
+            },
+            onSave: saveManualOffTaskRecord
+        ) {
+            EmptyView()
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
+    }
+
+    private func manualWorkSessionRecordForm(config: SalaryConfig) -> some View {
+        let tint: Color = workSessionManualKind == .clockOut ? .green : .indigo
+        let currentValidation = manualWorkSessionValidationMessage(config: config)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "timer")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(tint)
+                    .frame(width: 18)
+
+                Text("手动新增提前下班 / 加班记录")
+                    .font(.callout.weight(.semibold))
+
+                Spacer()
+
+                Text(workSessionManualKind == .clockOut ? "提前下班会自动使用当天应下班时间" : "加班从当天应下班时间开始计算")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Text("记录类型")
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(.secondary)
+                    .frame(width: 64, alignment: .leading)
+
+                settingsSegmentedControl(
+                    options: Array(WorkSessionRecordKind.allCases),
+                    selection: workSessionManualKindBinding(config: config),
+                    title: { $0.title }
+                )
+                .frame(width: 180)
+
+                Spacer()
+            }
+
+            if workSessionManualKind == .clockOut {
+                SecondPrecisionDateTimePicker(title: "实际下班时间", date: $workSessionManualStartDate, upperBound: Date())
+                workSessionComputedBoundaryNote(config: config)
+            } else {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Text("加班日期")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(.secondary)
+
+                        Text(workSessionManualWorkdayText)
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(.secondary)
+                    }
+
+                    RecordDateInput(date: workSessionManualWorkdayBinding, upperBound: Date())
+                }
+
+                DurationMinutesInput(title: "加班时长", totalMinutes: $workSessionManualOvertimeMinutes)
+                workSessionComputedBoundaryNote(config: config)
+            }
+
+            if let validationMessage = currentValidation ?? workSessionManualValidationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            HStack {
+                Text("保存后会进入历史记录，并按当前薪资和计薪规则重算金额与时长。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("取消") {
+                    showsWorkSessionManualForm = false
+                    workSessionManualValidationMessage = nil
+                }
+                .controlSize(.small)
+
+                Button("保存") {
+                    saveManualWorkSessionRecord(config: config)
+                }
+                .keyboardShortcut(.defaultAction)
+                .controlSize(.small)
+                .disabled(currentValidation != nil)
+            }
+        }
+        .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 7)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.58))
+                .fill(tint.opacity(0.07))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 7)
-                .stroke(Color(nsColor: .separatorColor).opacity(0.34), lineWidth: 1)
+                .stroke(tint.opacity(0.18), lineWidth: 1)
         )
+    }
+
+    private var workSessionManualWorkdayBinding: Binding<Date> {
+        Binding(
+            get: { Calendar.current.startOfDay(for: workSessionManualStartDate) },
+            set: { newValue in
+                workSessionManualStartDate = Calendar.current.startOfDay(for: newValue)
+            }
+        )
+    }
+
+    private var workSessionManualWorkdayText: String {
+        formatWorkSessionDate(Calendar.current.startOfDay(for: workSessionManualStartDate))
+    }
+
+    private func workSessionComputedBoundaryNote(config: SalaryConfig) -> some View {
+        let calendar = Calendar.current
+
+        return HStack(spacing: 6) {
+            Image(systemName: "calendar.badge.clock")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+
+            Text(workSessionComputedBoundaryText(config: config, calendar: calendar))
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func workSessionManualKindBinding(config: SalaryConfig) -> Binding<WorkSessionRecordKind> {
+        Binding(
+            get: { workSessionManualKind },
+            set: { newValue in
+                workSessionManualKind = newValue
+                workSessionManualValidationMessage = nil
+                normalizeWorkSessionManualDefaults(for: newValue, config: config)
+            }
+        )
+    }
+
+    private func workSessionComputedBoundaryText(config: SalaryConfig, calendar: Calendar = .current) -> String {
+        switch workSessionManualKind {
+        case .clockOut:
+            guard let window = SalaryWorkTimeline.activeWindow(containing: workSessionManualStartDate, config: config, calendar: calendar) else {
+                return "所选时间不在有效工作窗口内，无法推算当天应下班时间。"
+            }
+            return "将 \(formatWorkSessionDate(window.workday)) 改为 \(formatWorkSessionClock(workSessionManualStartDate)) 下班。"
+        case .overtime:
+            let workday = calendar.startOfDay(for: workSessionManualStartDate)
+            guard let window = SalaryWorkTimeline.workWindow(startingOn: workday, config: config, calendar: calendar) else {
+                return "所选日期没有有效工作窗口，无法推算加班开始时间。"
+            }
+            let end = calendar.date(byAdding: .minute, value: max(0, workSessionManualOvertimeMinutes), to: window.end) ?? window.end
+            return "\(formatWorkSessionDate(window.workday)) 加班到 \(formatWorkSessionBoundary(end, workday: window.workday))。"
+        }
+    }
+
+    private func manualRecordForm<Extra: View>(
+        title: String,
+        icon: String,
+        tint: Color,
+        startDate: Binding<Date>,
+        endDate: Binding<Date>,
+        validationMessage: String?,
+        settlementNote: String? = nil,
+        isSaveDisabled: Bool,
+        onCancel: @escaping () -> Void,
+        onSave: @escaping () -> Void,
+        @ViewBuilder extra: () -> Extra
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(tint)
+                    .frame(width: 18)
+
+                Text(title)
+                    .font(.callout.weight(.semibold))
+
+                Spacer()
+
+                Text("截止不能超过当前时间")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            extra()
+
+            VStack(alignment: .leading, spacing: 10) {
+                SecondPrecisionDateTimePicker(title: "开始", date: startDate, upperBound: Date())
+                SecondPrecisionDateTimePicker(title: "结束", date: endDate, upperBound: Date())
+            }
+
+            if let validationMessage {
+                Label(validationMessage, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            if let settlementNote {
+                Label(settlementNote, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Text("保存后会进入历史记录，并按当前薪资和计薪规则重算金额与时长。")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Spacer()
+
+                Button("取消") {
+                    onCancel()
+                }
+                .controlSize(.small)
+
+                Button("保存") {
+                    onSave()
+                }
+                .keyboardShortcut(.defaultAction)
+                .controlSize(.small)
+                .disabled(isSaveDisabled)
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(tint.opacity(0.07))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(tint.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func resetOffTaskManualFormDates() {
+        let end = Date()
+        offTaskManualEndDate = end
+        offTaskManualStartDate = end.addingTimeInterval(-1800)
+        offTaskManualValidationMessage = nil
+    }
+
+    private func resetWorkSessionManualFormDates(config: SalaryConfig) {
+        normalizeWorkSessionManualDefaults(for: workSessionManualKind, config: config)
+        workSessionManualValidationMessage = nil
+    }
+
+    private func normalizeWorkSessionManualDefaults(for kind: WorkSessionRecordKind, config: SalaryConfig) {
+        let now = Date()
+        let calendar = Calendar.current
+
+        switch kind {
+        case .clockOut:
+            if let activeWindow = SalaryWorkTimeline.activeWindow(containing: now, config: config, calendar: calendar) {
+                workSessionManualStartDate = min(now, activeWindow.end.addingTimeInterval(-1))
+            } else if let finishedWindow = SalaryWorkTimeline.latestFinishedWindow(endingAtOrBefore: now, config: config, calendar: calendar) {
+                workSessionManualStartDate = max(finishedWindow.start, finishedWindow.end.addingTimeInterval(-1800))
+            } else {
+                workSessionManualStartDate = now
+            }
+        case .overtime:
+            let workday = SalaryWorkTimeline.latestFinishedWindow(endingAtOrBefore: now, config: config, calendar: calendar)?.workday
+                ?? SalaryWorkTimeline.relevantWorkday(for: now, config: config, calendar: calendar)
+            workSessionManualStartDate = calendar.startOfDay(for: workday)
+            if workSessionManualOvertimeMinutes <= 0 {
+                workSessionManualOvertimeMinutes = 60
+            }
+        }
+    }
+
+    private func manualRangeValidationMessage(start: Date, end: Date, config: SalaryConfig, calendar: Calendar = .current) -> String? {
+        OffTaskTracker.sessionValidationMessage(start: start, end: end, now: Date(), config: config, calendar: calendar)
+    }
+
+    private func manualWorkSessionValidationMessage(config: SalaryConfig) -> String? {
+        switch workSessionManualKind {
+        case .clockOut:
+            return manualClockOutValidationMessage(config: config)
+        case .overtime:
+            return manualOvertimeValidationMessage(config: config)
+        }
+    }
+
+    private func saveManualOffTaskRecord() {
+        if let message = manualRangeValidationMessage(start: offTaskManualStartDate, end: offTaskManualEndDate, config: configManager.config) {
+            offTaskManualValidationMessage = message
+            return
+        }
+
+        guard offTaskTracker.addSession(start: offTaskManualStartDate, end: offTaskManualEndDate, config: configManager.config) else {
+            offTaskManualValidationMessage = "保存失败，请检查时间范围"
+            return
+        }
+
+        offTaskManualValidationMessage = nil
+        showsOffTaskManualForm = false
+    }
+
+    private func saveManualWorkSessionRecord(config: SalaryConfig) {
+        let saved: Bool
+        switch workSessionManualKind {
+        case .clockOut:
+            if let message = manualClockOutValidationMessage(config: config) {
+                workSessionManualValidationMessage = message
+                return
+            }
+
+            saved = workSessionTracker.addClockOutSession(
+                clockOutAt: workSessionManualStartDate,
+                config: config
+            )
+        case .overtime:
+            if let message = manualOvertimeValidationMessage(config: config) {
+                workSessionManualValidationMessage = message
+                return
+            }
+
+            saved = workSessionTracker.addOvertimeSession(
+                workday: workSessionManualStartDate,
+                durationMinutes: workSessionManualOvertimeMinutes,
+                config: config
+            )
+        }
+
+        guard saved else {
+            workSessionManualValidationMessage = "保存失败，请检查时间范围"
+            return
+        }
+
+        workSessionManualValidationMessage = nil
+        showsWorkSessionManualForm = false
+    }
+
+    private func manualClockOutValidationMessage(config: SalaryConfig, calendar: Calendar = .current) -> String? {
+        workSessionTracker.clockOutValidationMessage(clockOutAt: workSessionManualStartDate, now: Date(), config: config, calendar: calendar)
+    }
+
+    private func manualOvertimeValidationMessage(config: SalaryConfig, calendar: Calendar = .current) -> String? {
+        let workday = calendar.startOfDay(for: workSessionManualStartDate)
+        return workSessionTracker.overtimeValidationMessage(workday: workday, durationMinutes: workSessionManualOvertimeMinutes, now: Date(), config: config, calendar: calendar)
     }
 
     /// 摸鱼统计直接按已记录区间和当前薪资规则实时汇总，便于对照当日、周期和长期数据。
     private var offTaskStatsSection: some View {
+        let now = Date()
         let config = configManager.config
-        let today = offTaskTracker.currentSummary(config: config)
-        let displayPeriods = offTaskDisplayPeriods(config: config, today: today)
-        let startAvailability = offTaskTracker.startAvailability(config: config)
-        let statusDetail = offTaskStatusDetail(today)
+        let summaries = offTaskTracker.sessionSummaries(config: config, now: now)
+        let total = offTaskTracker.totalSummary(config: config, now: now)
+        let paidTimeContext = offTaskPaidTimeContext(config: config, summaries: summaries, now: now)
+        let displayPeriods = offTaskDisplayPeriods(config: config, now: now)
 
-        return LazyVStack(alignment: .leading, spacing: 16) {
-            GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(offTaskStatusText(today))
-                                .font(.callout.weight(.semibold))
-                            Text(statusDetail)
-                                .font(.caption)
-                                .monospacedDigit()
-                                .contentTransition(.numericText())
-                                .animation(.easeInOut(duration: 0.15), value: statusDetail)
-                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
-                        }
-
-                        Spacer()
-
-                        Button {
-                            offTaskTracker.toggle(config: config)
-                        } label: {
-                            Label(offTaskTracker.isActive ? "结束摸鱼" : "开启摸鱼", systemImage: offTaskTracker.isActive ? "stop.fill" : "play.fill")
-                        }
-                        .disabled(!offTaskTracker.isActive && !startAvailability.canStart)
-                        .help(offTaskToggleHelp(isActive: offTaskTracker.isActive, availability: startAvailability))
-                        .controlSize(.small)
-                    }
-
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
-                        offTaskStatCard(title: "摸鱼薪资", value: formatMoney(today.amount))
-                        offTaskStatCard(title: "计薪时长", value: formatOffTaskDuration(today.paidSeconds))
-                        offTaskStatCard(title: "摸鱼次数", value: "\(today.sessionCount)")
-                        offTaskStatCard(title: "今日占比", value: formatOffTaskPercent(today))
-                    }
-                }
-                .padding(12)
-            } label: {
-                Label("当前状态", systemImage: "fish")
+        return LazyVStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                Label("摸鱼记录", systemImage: "fish")
                     .font(.headline)
+
+                Spacer()
+
+                offTaskAddRecordButton
             }
 
             GroupBox {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 16) {
+                    if showsOffTaskManualForm {
+                        manualOffTaskRecordForm
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                    }
+
+                    recordSubsectionHeader(title: "数据概览", systemImage: "chart.bar.xaxis")
+
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), alignment: .leading, spacing: 10) {
                         ForEach(displayPeriods) { period in
                             offTaskPeriodCard(period)
                         }
                     }
+
+                    Divider()
+
+                    offTaskHistorySummarySection(
+                        config: config,
+                        total: total,
+                        summaries: summaries,
+                        paidTimeContext: paidTimeContext,
+                        now: now
+                    )
                 }
                 .padding(12)
-            } label: {
-                Label("数据概览", systemImage: "chart.bar.xaxis")
-                    .font(.headline)
             }
-
-            offTaskHistorySummarySection(config: config)
         }
     }
 
-    private func offTaskHistorySummarySection(config: SalaryConfig) -> some View {
-        let total = offTaskTracker.totalSummary(config: config)
-        let summaries = offTaskTracker.sessionSummaries(config: config)
-        let historyYears = offTaskHistoryYears(from: summaries)
+    private var offTaskAddRecordButton: some View {
+        Button {
+            resetOffTaskManualFormDates()
+            showsOffTaskManualForm = true
+        } label: {
+            Label("新增记录", systemImage: "plus.circle")
+        }
+        .controlSize(.small)
+    }
 
-        return GroupBox {
-            VStack(alignment: .leading, spacing: 12) {
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
-                    offTaskStatCard(title: "历史摸鱼薪资", value: formatMoney(total.amount))
-                    offTaskStatCard(title: "历史摸鱼时长", value: formatOffTaskDuration(total.paidSeconds))
-                    offTaskStatCard(title: "历史摸鱼次数", value: "\(total.sessionCount)")
-                    offTaskStatCard(title: "历史摸鱼天数", value: "\(total.dayCount)")
-                }
+    private func recordSubsectionHeader(title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.headline)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
-                Divider()
+    private func offTaskHistoryHeader(total: OffTaskAggregateSummary, config: SalaryConfig, mergeCount: Int) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            Label("历史记录", systemImage: "tray.full")
+                .font(.headline)
 
-                HStack(spacing: 8) {
-                    Label("年 / 月 / 日", systemImage: "square.stack.3d.down.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(.secondary)
+            Button {
+                let preview = offTaskTracker.overlappingMergePreviewByWorkday(config: config)
+                guard !preview.isEmpty else { return }
+                offTaskMergePreviewClusters = preview
+                showsOffTaskMergePreview = true
+            } label: {
+                Label("合并重叠区间", systemImage: "arrow.triangle.merge")
+            }
+            .controlSize(.small)
+            .disabled(mergeCount == 0)
+            .help(mergeCount == 0 ? "当前没有同一天内时间重叠的摸鱼记录。" : "预览并合并 \(mergeCount) 条重叠摸鱼记录。")
 
-                    Spacer()
+            Spacer()
 
-                    offTaskHistoryPill("\(total.sessionCount)次")
-                    offTaskHistoryPill("\(total.dayCount)天")
-                }
+            offTaskHistoryPill("\(total.sessionCount)次")
+            offTaskHistoryPill("\(total.dayCount)天")
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
-                if historyYears.isEmpty {
-                    Text("暂无摸鱼记录")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(historyYears) { year in
-                            offTaskHistoryYearDisclosure(year, summaries: summaries, config: config)
-                        }
+    private func offTaskHistorySummarySection(
+        config: SalaryConfig,
+        total: OffTaskAggregateSummary,
+        summaries: [OffTaskSessionSummary],
+        paidTimeContext: OffTaskPaidTimeContext,
+        now: Date
+    ) -> some View {
+        let historyYears = offTaskHistoryYears(from: summaries, paidTimeContext: paidTimeContext)
+        let mergeCount = offTaskOverlappingMergeCount(from: summaries, now: now)
+        let excludedRecordCount = summaries.filter { !$0.countedInStatistics && $0.settlementNote != nil }.count
+        let adjustedRecordCount = summaries.filter { $0.countedInStatistics && $0.settlementNote != nil }.count
+        let totalElapsedPaidSeconds = offTaskHistoryTotalElapsedSeconds(from: summaries, paidTimeContext: paidTimeContext, now: now)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            offTaskHistoryHeader(total: total, config: config, mergeCount: mergeCount)
+
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
+                offTaskStatCard(title: "历史摸鱼薪资", value: formatMoney(total.amount))
+                offTaskStatCard(title: "历史摸鱼时长", value: formatOffTaskDurationWithShare(total.paidSeconds, elapsedPaidSeconds: totalElapsedPaidSeconds))
+                offTaskStatCard(title: "历史摸鱼次数", value: "\(total.sessionCount)")
+                offTaskStatCard(title: "历史摸鱼天数", value: "\(total.dayCount)")
+            }
+
+            if !config.countsBreakTimeAsPaidWork, excludedRecordCount > 0 || adjustedRecordCount > 0 {
+                Label(offTaskBreakSettlementNotice(excludedRecordCount: excludedRecordCount, adjustedRecordCount: adjustedRecordCount), systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if historyYears.isEmpty {
+                Text("暂无摸鱼记录")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(historyYears) { year in
+                        offTaskHistoryYearDisclosure(year, summaries: summaries, config: config, paidTimeContext: paidTimeContext)
                     }
                 }
             }
-            .padding(12)
-        } label: {
-            Label("历史记录", systemImage: "tray.full")
-                .font(.headline)
         }
     }
 
-    private func offTaskDisplayPeriods(config: SalaryConfig, today: OffTaskDailySummary) -> [OffTaskDisplayPeriod] {
-        let now = Date()
+    private func offTaskDisplayPeriods(config: SalaryConfig, now: Date, calendar: Calendar = .current) -> [OffTaskDisplayPeriod] {
+        let today = offTaskTracker.currentSummary(config: config, now: now)
+        let todayEndExclusive = calendar.date(byAdding: .day, value: 1, to: today.workday) ?? today.workday
         let todayAggregate = OffTaskAggregateSummary(
             paidSeconds: today.paidSeconds,
             amount: today.amount,
@@ -2886,20 +4333,23 @@ struct SettingsView: View {
             OffTaskDisplayPeriod(
                 id: "today",
                 title: "本日",
-                rangeText: formatOffTaskDateRange(start: today.workday, endExclusive: Calendar.current.date(byAdding: .day, value: 1, to: today.workday) ?? today.workday),
-                summary: todayAggregate
+                rangeText: formatOffTaskDateRange(start: today.workday, endExclusive: todayEndExclusive),
+                summary: todayAggregate,
+                denominatorPaidSeconds: offTaskScheduledPaidWorkSeconds(from: today.workday, toExclusive: todayEndExclusive, config: config, calendar: calendar)
             ),
             OffTaskDisplayPeriod(
                 id: "week",
                 title: "本周",
                 rangeText: formatOffTaskDateRange(start: week.start, endExclusive: week.endExclusive),
-                summary: weekSummary
+                summary: weekSummary,
+                denominatorPaidSeconds: offTaskScheduledPaidWorkSeconds(from: week.start, toExclusive: week.endExclusive, config: config, calendar: calendar)
             ),
             OffTaskDisplayPeriod(
                 id: "settlement",
                 title: offTaskSettlementPeriodTitle(config),
                 rangeText: formatOffTaskDateRange(start: settlement.start, endExclusive: settlement.endExclusive),
-                summary: settlementSummary
+                summary: settlementSummary,
+                denominatorPaidSeconds: offTaskScheduledPaidWorkSeconds(from: settlement.start, toExclusive: settlement.endExclusive, config: config, calendar: calendar)
             )
         ]
     }
@@ -2920,7 +4370,7 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 7) {
                 offTaskPeriodMetric(title: "摸鱼薪资", value: formatMoney(period.summary.amount))
-                offTaskPeriodMetric(title: "计薪时长", value: formatOffTaskDuration(period.summary.paidSeconds))
+                offTaskPeriodMetric(title: "计薪时长", value: formatOffTaskDurationWithShare(period.summary.paidSeconds, elapsedPaidSeconds: period.denominatorPaidSeconds))
 
                 HStack(spacing: 8) {
                     offTaskHistoryPill("\(period.summary.sessionCount)次")
@@ -2955,8 +4405,98 @@ struct SettingsView: View {
         }
     }
 
+    private func offTaskBreakSettlementNotice(excludedRecordCount: Int, adjustedRecordCount: Int) -> String {
+        var parts: [String] = []
+        if excludedRecordCount > 0 {
+            parts.append("\(excludedRecordCount) 条只落在午休/晚饭等不计薪区间的记录会保留在历史中，但不计入摸鱼薪资、时长和次数")
+        }
+        if adjustedRecordCount > 0 {
+            parts.append("\(adjustedRecordCount) 条跨休息区间的记录只统计其中的计薪部分")
+        }
+        return "当前休息时间未计薪，" + parts.joined(separator: "；") + "。"
+    }
+
+    private func offTaskPaidTimeContext(config: SalaryConfig, summaries: [OffTaskSessionSummary], now: Date, calendar: Calendar = .current) -> OffTaskPaidTimeContext {
+        let currentWorkday = SalaryWorkTimeline.relevantWorkday(for: now, config: config, calendar: calendar)
+        let summaryStart = summaries.map { calendar.startOfDay(for: $0.workday) }.min()
+        let start = summaryStart ?? currentWorkday
+        let dayAfterNow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? calendar.startOfDay(for: now)
+        return OffTaskPaidTimeContext.make(from: start, toExclusive: dayAfterNow, now: now, config: config, calendar: calendar)
+    }
+
+    private func offTaskScheduledPaidWorkSeconds(from start: Date, toExclusive endExclusive: Date, config: SalaryConfig, calendar: Calendar = .current) -> TimeInterval {
+        let startDay = calendar.startOfDay(for: start)
+        let endDay = calendar.startOfDay(for: endExclusive)
+        guard endDay > startDay else { return 0 }
+
+        var total: TimeInterval = 0
+        var cursor = startDay
+        while cursor < endDay {
+            if let window = SalaryWorkTimeline.workWindow(startingOn: cursor, config: config, calendar: calendar) {
+                total += SalaryWorkTimeline.paidOverlapSeconds(
+                    from: window.start,
+                    to: window.end,
+                    in: window,
+                    config: config,
+                    calendar: calendar
+                )
+            }
+
+            guard let next = calendar.date(byAdding: .day, value: 1, to: cursor) else {
+                break
+            }
+            cursor = next
+        }
+        return total
+    }
+
+    private func offTaskHistoryTotalElapsedSeconds(from summaries: [OffTaskSessionSummary], paidTimeContext: OffTaskPaidTimeContext, now: Date, calendar: Calendar = .current) -> TimeInterval {
+        guard let firstDay = summaries.map({ calendar.startOfDay(for: $0.workday) }).min() else {
+            return 0
+        }
+        let dayAfterNow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? calendar.startOfDay(for: now)
+        return paidTimeContext.elapsedSeconds(from: firstDay, toExclusive: dayAfterNow)
+    }
+
+    private func offTaskOverlappingMergeCount(from summaries: [OffTaskSessionSummary], now: Date, calendar: Calendar = .current) -> Int {
+        let grouped = Dictionary(grouping: summaries) { summary in
+            calendar.startOfDay(for: summary.workday)
+        }
+
+        return grouped.values.reduce(0) { total, records in
+            let sorted = records.sorted { lhs, rhs in
+                if lhs.session.start == rhs.session.start {
+                    return (lhs.session.end ?? now) < (rhs.session.end ?? now)
+                }
+                return lhs.session.start < rhs.session.start
+            }
+
+            var removedCount = 0
+            var currentEnd: Date?
+            var currentClusterCount = 0
+
+            for summary in sorted {
+                let start = summary.session.start
+                let end = summary.session.end ?? now
+                guard end > start else { continue }
+
+                if let activeEnd = currentEnd, start < activeEnd {
+                    currentClusterCount += 1
+                    currentEnd = max(activeEnd, end)
+                } else {
+                    removedCount += max(0, currentClusterCount - 1)
+                    currentClusterCount = 1
+                    currentEnd = end
+                }
+            }
+
+            removedCount += max(0, currentClusterCount - 1)
+            return total + removedCount
+        }
+    }
+
     /// 历史记录按年、月、日逐级折叠，避免记录增多后单层列表过长。
-    private func offTaskHistoryYears(from summaries: [OffTaskSessionSummary]) -> [OffTaskHistoryYear] {
+    private func offTaskHistoryYears(from summaries: [OffTaskSessionSummary], paidTimeContext: OffTaskPaidTimeContext) -> [OffTaskHistoryYear] {
         let grouped = Dictionary(grouping: summaries) { summary in
             offTaskYearKey(summary.workday)
         }
@@ -2965,12 +4505,14 @@ struct SettingsView: View {
             guard let records = grouped[key] else {
                 return nil
             }
+            let range = offTaskYearRange(containing: records.first?.workday ?? Date())
 
             return OffTaskHistoryYear(
                 id: key,
                 title: formatOffTaskYear(records.first?.workday ?? Date()),
                 monthCount: Set(records.map { offTaskMonthKey($0.workday) }).count,
                 paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
+                elapsedPaidSeconds: paidTimeContext.elapsedSeconds(from: range.start, toExclusive: range.endExclusive),
                 amount: records.reduce(0) { $0 + $1.amount },
                 recordCount: records.count,
                 dayCount: Set(records.map { offTaskDayKey($0.workday) }).count
@@ -2978,7 +4520,7 @@ struct SettingsView: View {
         }
     }
 
-    private func offTaskHistoryMonths(from summaries: [OffTaskSessionSummary]) -> [OffTaskHistoryMonth] {
+    private func offTaskHistoryMonths(from summaries: [OffTaskSessionSummary], paidTimeContext: OffTaskPaidTimeContext) -> [OffTaskHistoryMonth] {
         let grouped = Dictionary(grouping: summaries) { summary in
             offTaskMonthKey(summary.workday)
         }
@@ -2987,19 +4529,21 @@ struct SettingsView: View {
             guard let records = grouped[key] else {
                 return nil
             }
+            let range = offTaskMonthRange(containing: records.first?.workday ?? Date())
 
             return OffTaskHistoryMonth(
                 id: key,
                 title: formatOffTaskMonth(records.first?.workday ?? Date()),
                 dayCount: Set(records.map { offTaskDayKey($0.workday) }).count,
                 paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
+                elapsedPaidSeconds: paidTimeContext.elapsedSeconds(from: range.start, toExclusive: range.endExclusive),
                 amount: records.reduce(0) { $0 + $1.amount },
                 recordCount: records.count
             )
         }
     }
 
-    private func offTaskHistoryDays(from summaries: [OffTaskSessionSummary]) -> [OffTaskHistoryDay] {
+    private func offTaskHistoryDays(from summaries: [OffTaskSessionSummary], paidTimeContext: OffTaskPaidTimeContext) -> [OffTaskHistoryDay] {
         let grouped = Dictionary(grouping: summaries) { summary in
             offTaskDayKey(summary.workday)
         }
@@ -3010,42 +4554,54 @@ struct SettingsView: View {
             }) else {
                 return nil
             }
+            let day = Calendar.current.startOfDay(for: records.first?.workday ?? Date())
+            let endExclusive = Calendar.current.date(byAdding: .day, value: 1, to: day) ?? day
 
             return OffTaskHistoryDay(
                 id: key,
                 title: formatOffTaskDay(records.first?.workday ?? Date()),
                 summaries: records,
                 paidSeconds: records.reduce(0) { $0 + $1.paidSeconds },
+                elapsedPaidSeconds: paidTimeContext.elapsedSeconds(from: day, toExclusive: endExclusive),
                 amount: records.reduce(0) { $0 + $1.amount }
             )
         }
     }
 
-    private func offTaskHistoryYearDisclosure(_ year: OffTaskHistoryYear, summaries: [OffTaskSessionSummary], config: SalaryConfig) -> some View {
+    private func offTaskHistoryYearDisclosure(_ year: OffTaskHistoryYear, summaries: [OffTaskSessionSummary], config: SalaryConfig, paidTimeContext: OffTaskPaidTimeContext) -> some View {
         let isExpanded = expandedOffTaskHistoryYears.contains(year.id)
+        let yearSummaries = summaries.filter { summary in
+            offTaskYearKey(summary.workday) == year.id
+        }
 
         return VStack(alignment: .leading, spacing: 0) {
-            offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
-                toggleOffTaskHistoryExpansion(year.id, in: &expandedOffTaskHistoryYears)
-            } label: {
-                offTaskHistoryGroupLabel(
-                    icon: "calendar",
-                    title: year.title,
-                    detail: "共计摸鱼\(year.monthCount)月 | \(year.dayCount)天",
-                    recordCount: year.recordCount,
-                    paidSeconds: year.paidSeconds,
-                    amount: year.amount
+            HStack(spacing: 8) {
+                offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
+                    toggleOffTaskHistoryExpansion(year.id, in: &expandedOffTaskHistoryYears)
+                } label: {
+                    offTaskHistoryGroupLabel(
+                        icon: "calendar",
+                        title: year.title,
+                        detail: "有记录\(year.monthCount)月 | \(year.dayCount)天",
+                        recordCount: year.recordCount,
+                        paidSeconds: year.paidSeconds,
+                        elapsedPaidSeconds: year.elapsedPaidSeconds,
+                        amount: year.amount
+                    )
+                }
+
+                offTaskBatchDeleteButton(
+                    title: "删除\(year.title)摸鱼记录？",
+                    message: "将删除\(year.title)下全部 \(year.recordCount) 条摸鱼记录；删除后无法恢复，对应摸鱼薪资和时长会立即从统计中移除。",
+                    summaries: yearSummaries
                 )
             }
 
             if isExpanded {
-                let yearSummaries = summaries.filter { summary in
-                    offTaskYearKey(summary.workday) == year.id
-                }
-                let months = offTaskHistoryMonths(from: yearSummaries)
+                let months = offTaskHistoryMonths(from: yearSummaries, paidTimeContext: paidTimeContext)
                 VStack(alignment: .leading, spacing: 8) {
                     ForEach(months) { month in
-                        offTaskHistoryMonthDisclosure(month, summaries: yearSummaries, config: config)
+                        offTaskHistoryMonthDisclosure(month, summaries: yearSummaries, config: config, paidTimeContext: paidTimeContext)
                     }
                 }
                 .padding(.top, 8)
@@ -3063,28 +4619,37 @@ struct SettingsView: View {
         )
     }
 
-    private func offTaskHistoryMonthDisclosure(_ month: OffTaskHistoryMonth, summaries: [OffTaskSessionSummary], config: SalaryConfig) -> some View {
+    private func offTaskHistoryMonthDisclosure(_ month: OffTaskHistoryMonth, summaries: [OffTaskSessionSummary], config: SalaryConfig, paidTimeContext: OffTaskPaidTimeContext) -> some View {
         let isExpanded = expandedOffTaskHistoryMonths.contains(month.id)
+        let monthSummaries = summaries.filter { summary in
+            offTaskMonthKey(summary.workday) == month.id
+        }
 
         return VStack(alignment: .leading, spacing: 0) {
-            offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
-                toggleOffTaskHistoryExpansion(month.id, in: &expandedOffTaskHistoryMonths)
-            } label: {
-                offTaskHistoryGroupLabel(
-                    icon: "calendar.circle",
-                    title: month.title,
-                    detail: "共计摸鱼\(month.dayCount)天",
-                    recordCount: month.recordCount,
-                    paidSeconds: month.paidSeconds,
-                    amount: month.amount
+            HStack(spacing: 8) {
+                offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
+                    toggleOffTaskHistoryExpansion(month.id, in: &expandedOffTaskHistoryMonths)
+                } label: {
+                    offTaskHistoryGroupLabel(
+                        icon: "calendar.circle",
+                        title: month.title,
+                        detail: "有记录\(month.dayCount)天",
+                        recordCount: month.recordCount,
+                        paidSeconds: month.paidSeconds,
+                        elapsedPaidSeconds: month.elapsedPaidSeconds,
+                        amount: month.amount
+                    )
+                }
+
+                offTaskBatchDeleteButton(
+                    title: "删除\(month.title)摸鱼记录？",
+                    message: "将删除\(month.title)下全部 \(month.recordCount) 条摸鱼记录；删除后无法恢复，对应摸鱼薪资和时长会立即从统计中移除。",
+                    summaries: monthSummaries
                 )
             }
 
             if isExpanded {
-                let monthSummaries = summaries.filter { summary in
-                    offTaskMonthKey(summary.workday) == month.id
-                }
-                let days = offTaskHistoryDays(from: monthSummaries)
+                let days = offTaskHistoryDays(from: monthSummaries, paidTimeContext: paidTimeContext)
                 VStack(alignment: .leading, spacing: 7) {
                     ForEach(days) { day in
                         offTaskHistoryDayDisclosure(day, config: config)
@@ -3109,16 +4674,25 @@ struct SettingsView: View {
         let isExpanded = expandedOffTaskHistoryDays.contains(day.id)
 
         return VStack(alignment: .leading, spacing: 0) {
-            offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
-                toggleOffTaskHistoryExpansion(day.id, in: &expandedOffTaskHistoryDays)
-            } label: {
-                offTaskHistoryGroupLabel(
-                    icon: "calendar.day.timeline.left",
-                    title: day.title,
-                    detail: nil,
-                    recordCount: day.summaries.count,
-                    paidSeconds: day.paidSeconds,
-                    amount: day.amount
+            HStack(spacing: 8) {
+                offTaskHistoryDisclosureButton(isExpanded: isExpanded) {
+                    toggleOffTaskHistoryExpansion(day.id, in: &expandedOffTaskHistoryDays)
+                } label: {
+                    offTaskHistoryGroupLabel(
+                        icon: "calendar.day.timeline.left",
+                        title: day.title,
+                        detail: nil,
+                        recordCount: day.summaries.count,
+                        paidSeconds: day.paidSeconds,
+                        elapsedPaidSeconds: day.elapsedPaidSeconds,
+                        amount: day.amount
+                    )
+                }
+
+                offTaskBatchDeleteButton(
+                    title: "删除\(day.title)摸鱼记录？",
+                    message: "将删除\(day.title)下全部 \(day.summaries.count) 条摸鱼记录；删除后无法恢复，对应摸鱼薪资和时长会立即从统计中移除。",
+                    summaries: day.summaries
                 )
             }
 
@@ -3186,6 +4760,28 @@ struct SettingsView: View {
         .help(isExpanded ? "收起记录" : "展开记录")
     }
 
+    private func offTaskBatchDeleteButton(
+        title: String,
+        message: String,
+        summaries: [OffTaskSessionSummary]
+    ) -> some View {
+        Button(role: .destructive) {
+            pendingOffTaskBatchDelete = OffTaskBatchDeleteRequest(
+                title: title,
+                message: message,
+                sessionIDs: Set(summaries.map(\.id))
+            )
+        } label: {
+            Image(systemName: "trash")
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 24, height: 24)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .disabled(summaries.isEmpty)
+        .help(title)
+    }
+
     private func toggleOffTaskHistoryExpansion(_ id: String, in expandedIDs: inout Set<String>) {
         if expandedIDs.contains(id) {
             expandedIDs.remove(id)
@@ -3200,6 +4796,7 @@ struct SettingsView: View {
         detail: String?,
         recordCount: Int,
         paidSeconds: TimeInterval,
+        elapsedPaidSeconds: TimeInterval,
         amount: Double
     ) -> some View {
         HStack(spacing: 8) {
@@ -3219,8 +4816,9 @@ struct SettingsView: View {
 
             Spacer(minLength: 10)
 
-            offTaskHistoryPill("\(recordCount)次")
+            offTaskHistoryPill("\(recordCount)条")
             offTaskHistoryPill(formatOffTaskDuration(paidSeconds))
+            offTaskHistoryPill(formatOffTaskSharePercent(paidSeconds: paidSeconds, elapsedPaidSeconds: elapsedPaidSeconds))
             Text(formatMoney(amount))
                 .font(.caption.monospacedDigit().weight(.semibold))
                 .foregroundColor(.primary)
@@ -4198,12 +5796,12 @@ struct SettingsView: View {
             Text(value)
                 .font(.title3.weight(.semibold))
                 .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.68)
+                .lineLimit(2)
+                .minimumScaleFactor(0.72)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 88, maxHeight: 88, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 7)
                 .fill(Color.orange.opacity(0.08))
@@ -4303,10 +5901,13 @@ struct SettingsView: View {
         isActive ? "结束当前摸鱼记录" : availability.helpMessage
     }
 
-    private func formatOffTaskPercent(_ summary: OffTaskDailySummary) -> String {
-        let dailySalary = configManager.config.effectiveDailySalary(on: summary.workday)
-        guard dailySalary > 0 else { return "0.0%" }
-        return String(format: "%.1f%%", summary.amount / dailySalary * 100)
+    private func formatOffTaskDurationWithShare(_ seconds: TimeInterval, elapsedPaidSeconds: TimeInterval) -> String {
+        "\(formatOffTaskDuration(seconds))（\(formatOffTaskSharePercent(paidSeconds: seconds, elapsedPaidSeconds: elapsedPaidSeconds))）"
+    }
+
+    private func formatOffTaskSharePercent(paidSeconds: TimeInterval, elapsedPaidSeconds: TimeInterval) -> String {
+        guard elapsedPaidSeconds > 0 else { return "0.0%" }
+        return String(format: "%.1f%%", paidSeconds / elapsedPaidSeconds * 100)
     }
 
     private func formatOffTaskDuration(_ seconds: TimeInterval) -> String {
@@ -4334,6 +5935,27 @@ struct SettingsView: View {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "zh_CN")
         formatter.dateFormat = "HH:mm:ss"
+        return formatter.string(from: date)
+    }
+
+    private func formatWorkSessionRange(start: Date, end: Date) -> String {
+        if Calendar.current.isDate(start, inSameDayAs: end) {
+            return "\(formatWorkSessionClock(start)) - \(formatWorkSessionClock(end))"
+        }
+        return "\(formatWorkSessionDate(start)) \(formatWorkSessionClock(start)) - \(formatWorkSessionDate(end)) \(formatWorkSessionClock(end))"
+    }
+
+    private func formatWorkSessionBoundary(_ date: Date, workday: Date) -> String {
+        if Calendar.current.isDate(date, inSameDayAs: workday) {
+            return formatWorkSessionClock(date)
+        }
+        return "\(formatWorkSessionDate(date)) \(formatWorkSessionClock(date))"
+    }
+
+    private func formatWorkSessionDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy.MM.dd E"
         return formatter.string(from: date)
     }
 
@@ -4383,6 +6005,20 @@ struct SettingsView: View {
         let mappedWeekday = weekday == 1 ? 7 : weekday - 1
         let start = calendar.date(byAdding: .day, value: 1 - mappedWeekday, to: day) ?? day
         let endExclusive = calendar.date(byAdding: .day, value: 7, to: start) ?? start
+        return (start, endExclusive)
+    }
+
+    private func offTaskYearRange(containing date: Date, calendar: Calendar = .current) -> (start: Date, endExclusive: Date) {
+        let components = calendar.dateComponents([.year], from: date)
+        let start = calendar.date(from: components) ?? calendar.startOfDay(for: date)
+        let endExclusive = calendar.date(byAdding: .year, value: 1, to: start) ?? start
+        return (start, endExclusive)
+    }
+
+    private func offTaskMonthRange(containing date: Date, calendar: Calendar = .current) -> (start: Date, endExclusive: Date) {
+        let components = calendar.dateComponents([.year, .month], from: date)
+        let start = calendar.date(from: components) ?? calendar.startOfDay(for: date)
+        let endExclusive = calendar.date(byAdding: .month, value: 1, to: start) ?? start
         return (start, endExclusive)
     }
 

@@ -65,6 +65,21 @@ enum SalaryWorkTimeline {
             .max { $0.end < $1.end }
     }
 
+    static func nextWorkWindow(startingAtOrAfter date: Date, config: SalaryConfig, calendar: Calendar = .current, searchLimitDays: Int = 370) -> SalaryWorkWindow? {
+        let firstDay = calendar.startOfDay(for: date)
+        for offset in 0...searchLimitDays {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: firstDay) else {
+                break
+            }
+            guard let window = workWindow(startingOn: day, config: config, calendar: calendar),
+                  window.start >= date else {
+                continue
+            }
+            return window
+        }
+        return nil
+    }
+
     static func paidInterval(containing date: Date, in window: SalaryWorkWindow, config: SalaryConfig, calendar: Calendar = .current) -> DateInterval? {
         paidIntervals(in: window, config: config, calendar: calendar).first { interval in
             date >= interval.start && date < interval.end
@@ -129,6 +144,29 @@ enum SalaryWorkTimeline {
         return paidIntervals(in: window, config: config, calendar: calendar).reduce(0) { total, interval in
             let overlapStart = max(start, interval.start)
             let overlapEnd = min(end, interval.end)
+            guard overlapEnd > overlapStart else { return total }
+            return total + overlapEnd.timeIntervalSince(overlapStart)
+        }
+    }
+
+    static func workWindowOverlapSeconds(from start: Date, to end: Date, in window: SalaryWorkWindow) -> TimeInterval {
+        guard end > start else { return 0 }
+
+        let overlapStart = max(start, window.start)
+        let overlapEnd = min(end, window.end)
+        guard overlapEnd > overlapStart else { return 0 }
+        return overlapEnd.timeIntervalSince(overlapStart)
+    }
+
+    static func unpaidBreakOverlapSeconds(from start: Date, to end: Date, in window: SalaryWorkWindow, config: SalaryConfig, calendar: Calendar = .current) -> TimeInterval {
+        guard end > start,
+              !config.countsBreakTimeAsPaidWork else {
+            return 0
+        }
+
+        return namedBreakIntervals(in: window, config: config, calendar: calendar).reduce(0) { total, namedInterval in
+            let overlapStart = max(start, namedInterval.interval.start)
+            let overlapEnd = min(end, namedInterval.interval.end)
             guard overlapEnd > overlapStart else { return total }
             return total + overlapEnd.timeIntervalSince(overlapStart)
         }
