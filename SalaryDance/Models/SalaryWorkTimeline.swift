@@ -76,7 +76,7 @@ enum SalaryWorkTimeline {
         let yesterday = calendar.date(byAdding: .day, value: -1, to: today) ?? today
         let todayWindow = workWindow(startingOn: today, config: config, calendar: calendar)
 
-        // 跨夜班次刚结束后，弹窗里的“今日摸鱼”和下班总结仍应指向刚收工的工作日。
+        // 跨夜班次刚结束后，弹窗里的“今日摸鱼”仍应指向刚收工的工作日。
         if let yesterdayWindow = workWindow(startingOn: yesterday, config: config, calendar: calendar),
            yesterdayWindow.end > today,
            date >= yesterdayWindow.end,

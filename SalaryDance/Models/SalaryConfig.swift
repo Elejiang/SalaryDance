@@ -669,6 +669,8 @@ struct SalaryConfig: Codable, Equatable {
     var popoverShowsQuote: Bool = false
     /// 弹窗是否显示摸鱼状态卡片。
     var popoverShowsOffTaskStatus: Bool = true
+    /// 弹窗摸鱼卡片是否显示今日摸鱼摘要。
+    var popoverShowsTodayOffTaskSummary: Bool = true
     /// 弹窗摸鱼卡片是否显示本日摸鱼薪资。
     var popoverShowsTodayOffTaskSalary: Bool = true
     /// 弹窗摸鱼卡片是否显示本周摸鱼薪资。
@@ -773,6 +775,7 @@ struct SalaryConfig: Codable, Equatable {
         case popoverShowsWorkProgress
         case popoverShowsQuote
         case popoverShowsOffTaskStatus
+        case popoverShowsTodayOffTaskSummary
         case popoverShowsTodayOffTaskSalary
         case popoverShowsWeekOffTaskSalary
         case popoverShowsSalaryCycleOffTaskSalary
@@ -849,6 +852,7 @@ struct SalaryConfig: Codable, Equatable {
         popoverShowsWorkProgress = container.decodeLossy(Bool.self, forKey: .popoverShowsWorkProgress, default: defaults.popoverShowsWorkProgress)
         popoverShowsQuote = container.decodeLossy(Bool.self, forKey: .popoverShowsQuote, default: defaults.popoverShowsQuote)
         popoverShowsOffTaskStatus = container.decodeLossy(Bool.self, forKey: .popoverShowsOffTaskStatus, default: defaults.popoverShowsOffTaskStatus)
+        popoverShowsTodayOffTaskSummary = container.decodeLossy(Bool.self, forKey: .popoverShowsTodayOffTaskSummary, default: defaults.popoverShowsTodayOffTaskSummary)
         popoverShowsTodayOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsTodayOffTaskSalary, default: defaults.popoverShowsTodayOffTaskSalary)
         popoverShowsWeekOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsWeekOffTaskSalary, default: defaults.popoverShowsWeekOffTaskSalary)
         popoverShowsSalaryCycleOffTaskSalary = container.decodeLossy(Bool.self, forKey: .popoverShowsSalaryCycleOffTaskSalary, default: defaults.popoverShowsSalaryCycleOffTaskSalary)
@@ -1005,6 +1009,10 @@ struct SalaryConfig: Codable, Equatable {
         popoverShowsOffTaskStatus
     }
 
+    var popoverDisplaysTodayOffTaskSummary: Bool {
+        popoverShowsTodayOffTaskSummary
+    }
+
     var popoverDisplaysTodayOffTaskSalary: Bool {
         popoverShowsTodayOffTaskSalary
     }
@@ -1057,7 +1065,9 @@ struct SalaryConfig: Codable, Equatable {
     }
 
     var popoverDisplaysAnyOffTaskInformation: Bool {
-        popoverDisplaysOffTaskStatus || popoverDisplaysAnyOffTaskMetric
+        popoverDisplaysOffTaskStatus
+            || popoverDisplaysTodayOffTaskSummary
+            || popoverDisplaysAnyOffTaskMetric
     }
 
     var usesLunchBreak: Bool {
@@ -1891,6 +1901,7 @@ struct SalaryPreferenceSettings: Codable, Equatable {
     var popoverShowsWorkProgress: Bool
     var popoverShowsQuote: Bool
     var popoverShowsOffTaskStatus: Bool
+    var popoverShowsTodayOffTaskSummary: Bool?
     var popoverShowsTodayOffTaskSalary: Bool
     var popoverShowsWeekOffTaskSalary: Bool
     var popoverShowsSalaryCycleOffTaskSalary: Bool
@@ -1944,6 +1955,7 @@ struct SalaryPreferenceSettings: Codable, Equatable {
         popoverShowsWorkProgress = config.popoverShowsWorkProgress
         popoverShowsQuote = config.popoverShowsQuote
         popoverShowsOffTaskStatus = config.popoverShowsOffTaskStatus
+        popoverShowsTodayOffTaskSummary = config.popoverShowsTodayOffTaskSummary
         popoverShowsTodayOffTaskSalary = config.popoverShowsTodayOffTaskSalary
         popoverShowsWeekOffTaskSalary = config.popoverShowsWeekOffTaskSalary
         popoverShowsSalaryCycleOffTaskSalary = config.popoverShowsSalaryCycleOffTaskSalary
@@ -1999,6 +2011,7 @@ struct SalaryPreferenceSettings: Codable, Equatable {
         updated.popoverShowsWorkProgress = popoverShowsWorkProgress
         updated.popoverShowsQuote = popoverShowsQuote
         updated.popoverShowsOffTaskStatus = popoverShowsOffTaskStatus
+        updated.popoverShowsTodayOffTaskSummary = popoverShowsTodayOffTaskSummary ?? true
         updated.popoverShowsTodayOffTaskSalary = popoverShowsTodayOffTaskSalary
         updated.popoverShowsWeekOffTaskSalary = popoverShowsWeekOffTaskSalary
         updated.popoverShowsSalaryCycleOffTaskSalary = popoverShowsSalaryCycleOffTaskSalary

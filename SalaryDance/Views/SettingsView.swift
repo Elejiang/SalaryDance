@@ -1852,7 +1852,10 @@ struct SettingsView: View {
                                 set: { configManager.config.popoverShowsOffTaskStatus = $0 }
                             ))
 
-                            Spacer(minLength: 0)
+                            popoverContentToggle("今日摸鱼", isOn: Binding(
+                                get: { configManager.config.popoverDisplaysTodayOffTaskSummary },
+                                set: { configManager.config.popoverShowsTodayOffTaskSummary = $0 }
+                            ))
                         }
 
                         Text("摸鱼薪资")
@@ -2058,6 +2061,7 @@ struct SettingsView: View {
         let displayPeriods = offTaskDisplayPeriods(config: config, today: today)
         let historyYears = offTaskHistoryYears(config: config)
         let startAvailability = offTaskTracker.startAvailability(config: config)
+        let statusDetail = offTaskStatusDetail(today)
 
         return VStack(alignment: .leading, spacing: 16) {
             GroupBox {
@@ -2066,9 +2070,12 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(offTaskStatusText(today))
                                 .font(.callout.weight(.semibold))
-                            Text(offTaskStatusDetail(today))
+                            Text(statusDetail)
                                 .font(.caption)
-                                .foregroundColor(.secondary)
+                                .monospacedDigit()
+                                .contentTransition(.numericText())
+                                .animation(.easeInOut(duration: 0.15), value: statusDetail)
+                                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                         }
 
                         Spacer()
@@ -3515,16 +3522,24 @@ struct SettingsView: View {
     }
 
     private func offTaskStatusDetail(_ summary: OffTaskDailySummary) -> String {
+        let summaryText = offTaskDailySummaryText(summary)
+
         if offTaskTracker.isActive, let start = offTaskTracker.activeSessionStart {
-            return "从 \(formatOffTaskClock(start)) 开始，今日已累计 \(formatOffTaskDuration(summary.paidSeconds))"
+            return "从 \(formatOffTaskClock(start)) 开始，\(summaryText)"
         }
-        if summary.isWorkFinished {
-            return summary.hasRecords
-                ? "下班总结：\(formatOffTaskDuration(summary.paidSeconds))，\(formatMoney(summary.amount))"
-                : "下班总结：今天没有摸鱼记录"
-        }
+
         let availability = offTaskTracker.startAvailability(config: configManager.config)
-        return availability.canStart ? "今日已累计 \(formatOffTaskDuration(summary.paidSeconds))" : availability.shortMessage
+        if !summary.isWorkFinished && !availability.canStart && !summary.hasRecords {
+            return "\(availability.shortMessage)，\(summaryText)"
+        }
+        return summaryText
+    }
+
+    private func offTaskDailySummaryText(_ summary: OffTaskDailySummary) -> String {
+        guard summary.hasRecords else {
+            return "今日摸鱼：暂无摸鱼记录"
+        }
+        return "今日摸鱼：\(formatOffTaskDuration(summary.paidSeconds))，\(formatMoney(summary.amount))"
     }
 
     private func offTaskToggleHelp(isActive: Bool, availability: OffTaskStartAvailability) -> String {

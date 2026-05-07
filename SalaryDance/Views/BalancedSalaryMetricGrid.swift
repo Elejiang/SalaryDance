@@ -80,19 +80,23 @@ struct BalancedSalaryMetricGrid: View {
     }
 
     private func metricCard(_ metric: SalaryMetricItem) -> some View {
-        VStack(spacing: 4) {
+        let displayedValue = isPrivate && metric.isSensitive ? "***" : metric.value
+
+        return VStack(spacing: 4) {
             Text(metric.title)
                 .font(.caption2)
                 .foregroundColor(.secondary)
                 .lineLimit(1)
 
-            Text(isPrivate && metric.isSensitive ? "***" : metric.value)
+            Text(displayedValue)
                 .font(valueFont)
                 .foregroundColor(tint)
                 .monospacedDigit()
                 .lineLimit(1)
                 .minimumScaleFactor(valueMinimumScaleFactor)
                 .frame(maxWidth: .infinity)
+                .contentTransition(.numericText())
+                .animation(.easeInOut(duration: 0.15), value: displayedValue)
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 6)

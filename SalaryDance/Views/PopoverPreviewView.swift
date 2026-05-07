@@ -26,6 +26,7 @@ struct PopoverPreviewView: View {
             || config.popoverDisplaysRemainingEarnings
             || config.popoverDisplaysAnySalaryRate
         let showsOffTaskSensitiveContent = config.popoverDisplaysAnyOffTaskSalaryMetric
+            || config.popoverDisplaysTodayOffTaskSummary
 
         VStack(alignment: .leading, spacing: 8) {
             Text("弹窗")
@@ -111,7 +112,9 @@ struct PopoverPreviewView: View {
             isPrivate: isPrivate,
             subtitle: "未开启",
             metrics: previewOffTaskMetrics(dailySalary: previewViewModel.effectiveDailySalary),
-            finishedSummary: nil,
+            summaryText: config.popoverDisplaysTodayOffTaskSummary
+                ? previewOffTaskSummaryText(dailySalary: previewViewModel.effectiveDailySalary)
+                : nil,
             showsPrivacyAction: showsPrivacyAction,
             toggleHelp: "预览中不会改写真实摸鱼记录。",
             privacyAction: {
@@ -152,6 +155,13 @@ struct PopoverPreviewView: View {
         }
 
         return metrics
+    }
+
+    private func previewOffTaskSummaryText(dailySalary: Double) -> String {
+        let amount = config.hasCompensation ? dailySalary * 0.06 : 0
+        let money = isPrivate ? "¥***" : formatMoney(amount)
+        let percent = dailySalary > 0 ? amount / dailySalary * 100 : 0
+        return "今日摸鱼：18分，\(money)，占今日收入 \(String(format: "%.1f%%", percent))"
     }
 
     private func formatMoney(_ value: Double, showCurrencySymbol: Bool = true) -> String {

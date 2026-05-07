@@ -615,6 +615,7 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             || config.popoverDisplaysRemainingEarnings
             || config.popoverDisplaysAnySalaryRate
             || config.popoverDisplaysWorkProgress
+        let showsOffTaskPanel = config.popoverDisplaysAnyOffTaskInformation
 
         var height: CGFloat = 24
         var outerSections = 0
@@ -655,12 +656,34 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             height += salaryHeight
         }
 
-        if config.popoverDisplaysOffTaskStatus {
+        if showsOffTaskPanel {
             outerSections += 1
-            height += 94
+            var offTaskHeight: CGFloat = 16
+            var offTaskSections = 0
+
+            if config.popoverDisplaysOffTaskStatus {
+                offTaskSections += 1
+                offTaskHeight += 28
+            }
+
+            if config.popoverDisplaysTodayOffTaskSummary {
+                // 摸鱼“今日摸鱼”跟随状态常驻展示，兜底高度需要预留两行文案空间。
+                offTaskSections += 1
+                offTaskHeight += 30
+            }
+
+            let metricCount = popoverOffTaskMetricCount(for: config)
+            if metricCount > 0 {
+                offTaskSections += 1
+                let rows = CGFloat((metricCount + 1) / 2)
+                offTaskHeight += rows * 42 + max(0, rows - 1) * 7
+            }
+
+            offTaskHeight += CGFloat(max(0, offTaskSections - 1)) * 9
+            height += offTaskHeight
         }
 
-        if (showsSalaryBlock || config.popoverDisplaysOffTaskStatus) && config.popoverDisplaysQuote {
+        if (showsSalaryBlock || showsOffTaskPanel) && config.popoverDisplaysQuote {
             outerSections += 1
             height += 1
         }
@@ -686,6 +709,20 @@ final class StatusBarController: NSObject, ObservableObject, NSPopoverDelegate {
             config.popoverDisplaysDailySalary,
             config.popoverDisplaysMonthlySalary,
             config.popoverDisplaysYearlySalary
+        ].filter { $0 }.count
+    }
+
+    /// 统计开启的摸鱼指标数量，用于估算双列指标网格高度。
+    private func popoverOffTaskMetricCount(for config: SalaryConfig) -> Int {
+        [
+            config.popoverDisplaysTodayOffTaskSalary,
+            config.popoverDisplaysWeekOffTaskSalary,
+            config.popoverDisplaysSalaryCycleOffTaskSalary,
+            config.popoverDisplaysHistoricalOffTaskSalary,
+            config.popoverDisplaysTodayOffTaskDuration,
+            config.popoverDisplaysWeekOffTaskDuration,
+            config.popoverDisplaysSalaryCycleOffTaskDuration,
+            config.popoverDisplaysHistoricalOffTaskDuration
         ].filter { $0 }.count
     }
 

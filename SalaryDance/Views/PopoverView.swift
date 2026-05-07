@@ -23,6 +23,7 @@ struct PopoverView: View {
             || config.popoverDisplaysRemainingEarnings
             || config.popoverDisplaysAnySalaryRate
         let showsOffTaskSensitiveContent = config.popoverDisplaysAnyOffTaskSalaryMetric
+            || config.popoverDisplaysTodayOffTaskSummary
 
         VStack(spacing: 12) {
             if showsSalaryBlock {
@@ -114,7 +115,7 @@ struct PopoverView: View {
             isPrivate: statusBarController.isContentMasked,
             subtitle: offTaskSubtitle(isActive: isActive, availability: availability, summary: summary),
             metrics: metrics,
-            finishedSummary: config.popoverDisplaysOffTaskStatus && summary.isWorkFinished ? offTaskFinishedSummaryText(summary) : nil,
+            summaryText: config.popoverDisplaysTodayOffTaskSummary ? offTaskDailySummaryText(summary) : nil,
             showsPrivacyAction: showsPrivacyAction,
             toggleHelp: offTaskToggleHelp(isActive: isActive, availability: availability),
             privacyAction: {
@@ -145,15 +146,16 @@ struct PopoverView: View {
         isActive ? "结束当前摸鱼记录" : availability.helpMessage
     }
 
-    private func offTaskFinishedSummaryText(_ summary: OffTaskDailySummary) -> String {
+    private func offTaskDailySummaryText(_ summary: OffTaskDailySummary) -> String {
         guard summary.hasRecords else {
-            return "下班总结：今天没有摸鱼记录"
+            return "今日摸鱼：暂无摸鱼记录"
         }
 
-        let percent = viewModel.effectiveDailySalary > 0
-            ? summary.amount / viewModel.effectiveDailySalary * 100
+        let dailySalary = configManager.config.effectiveDailySalary(on: summary.workday)
+        let percent = dailySalary > 0
+            ? summary.amount / dailySalary * 100
             : 0
-        return "下班总结：\(formatOffTaskDuration(summary.paidSeconds))，\(formatOffTaskMoney(summary.amount))，占今日收入 \(String(format: "%.1f%%", percent))"
+        return "今日摸鱼：\(formatOffTaskDuration(summary.paidSeconds))，\(formatOffTaskMoney(summary.amount))，占今日收入 \(String(format: "%.1f%%", percent))"
     }
 
     private func offTaskPanelMetrics(config: SalaryConfig, today: OffTaskDailySummary) -> [SalaryMetricItem] {
@@ -271,7 +273,7 @@ struct OffTaskPopoverPanelView: View {
     let isPrivate: Bool
     let subtitle: String
     let metrics: [SalaryMetricItem]
-    let finishedSummary: String?
+    let summaryText: String?
     let showsPrivacyAction: Bool
     let toggleHelp: String
     let privacyAction: () -> Void
@@ -310,12 +312,15 @@ struct OffTaskPopoverPanelView: View {
                 )
             }
 
-            if let finishedSummary {
-                Text(finishedSummary)
+            if let summaryText {
+                Text(summaryText)
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .monospacedDigit()
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                    .contentTransition(.numericText())
+                    .animation(.easeInOut(duration: 0.15), value: summaryText)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
             }
         }
         .padding(.vertical, 8)
