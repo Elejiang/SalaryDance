@@ -119,7 +119,7 @@ struct PopoverPreviewView: View {
 
         return WorkSessionPopoverPanelView(
             isPrivate: isPrivate,
-            title: "提前下班与加班",
+            title: "提前下班与晚下班",
             subtitle: "可提前下班",
             activeOvertimeSummary: nil,
             summaryText: config.popoverDisplaysTodayWorkSessionSummary
@@ -139,8 +139,8 @@ struct PopoverPreviewView: View {
             overtimeHours: $overtimeHours,
             overtimeMinutes: $overtimeMinutes,
             clockOutHelp: "预览中不会改写真实提前下班记录。",
-            overtimeHelp: "预览中不会改写真实加班记录。",
-            endOvertimeHelp: "预览中不会改写真实加班记录。",
+            overtimeHelp: "预览中不会改写真实晚下班记录。",
+            endOvertimeHelp: "预览中不会改写真实晚下班记录。",
             privacyAction: {
                 isPrivate.toggle()
             },

@@ -31,7 +31,7 @@ private enum SettingsCategory: String, CaseIterable, Identifiable {
         case .salary: return "输入薪资、补贴和金额精度"
         case .time: return "工作时段、休息和计薪时长"
         case .display: return "状态栏、弹窗和时间轴"
-        case .offTask: return "摸鱼、提前下班和加班统计"
+        case .offTask: return "摸鱼、提前下班和晚下班统计"
         case .shortcut: return "快捷键录制和动作顺序"
         case .calendar: return "计薪规则、节假日和调休日"
         case .app: return "启动、刷新和备份迁移"
@@ -1096,7 +1096,7 @@ private struct WorkSessionRecordRowView: View {
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 6) {
-                        Text("加班日期")
+                        Text("晚下班日期")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
 
@@ -1108,7 +1108,7 @@ private struct WorkSessionRecordRowView: View {
                     RecordDateInput(date: overtimeWorkdayBinding, upperBound: Date())
                 }
 
-                DurationMinutesInput(title: "加班时长", totalMinutes: $overtimeMinutes)
+                DurationMinutesInput(title: "晚下班时长", totalMinutes: $overtimeMinutes)
                 boundaryNote(overtimeBoundaryText())
             }
 
@@ -1174,13 +1174,13 @@ private struct WorkSessionRecordRowView: View {
     private func overtimeBoundaryText(calendar: Calendar = .current) -> String {
         let workday = calendar.startOfDay(for: overtimeWorkday)
         guard let window = SalaryWorkTimeline.workWindow(startingOn: workday, config: config, calendar: calendar) else {
-            return "所选日期没有有效工作窗口，无法推算加班开始时间。"
+            return "所选日期没有有效工作窗口，无法推算晚下班开始时间。"
         }
         let end = calendar.date(byAdding: .minute, value: max(0, overtimeMinutes), to: window.end) ?? window.end
         if let nextWindow = SalaryWorkTimeline.nextWorkWindow(startingAtOrAfter: window.end, config: config, calendar: calendar) {
-            return "将记录 \(formatDate(window.workday)) 应下班 \(formatClock(window.end)) 后加班到 \(formatBoundary(end, workday: window.workday))；下次上班 \(formatBoundary(nextWindow.start, workday: window.workday)) 前需要结束。"
+            return "将记录 \(formatDate(window.workday)) 应下班 \(formatClock(window.end)) 后晚下班到 \(formatBoundary(end, workday: window.workday))；下次上班 \(formatBoundary(nextWindow.start, workday: window.workday)) 前需要结束。"
         }
-        return "将记录 \(formatDate(window.workday)) 应下班 \(formatClock(window.end)) 后加班到 \(formatBoundary(end, workday: window.workday))。"
+        return "将记录 \(formatDate(window.workday)) 应下班 \(formatClock(window.end)) 后晚下班到 \(formatBoundary(end, workday: window.workday))。"
     }
 
     private func editingValidationMessage(calendar: Calendar = .current) -> String? {
@@ -1664,7 +1664,7 @@ struct SettingsView: View {
             Text(pendingOffTaskBatchDelete?.message ?? "")
         }
         .alert(
-            pendingWorkSessionBatchDelete?.title ?? "删除提前下班/加班记录？",
+            pendingWorkSessionBatchDelete?.title ?? "删除提前下班/晚下班记录？",
             isPresented: Binding(
                 get: { pendingWorkSessionBatchDelete != nil },
                 set: { isPresented in
@@ -3130,7 +3130,7 @@ struct SettingsView: View {
                         }
                     }
 
-                    popoverContentGroup("提前下班与加班") {
+                    popoverContentGroup("提前下班与晚下班") {
                         HStack(spacing: 10) {
                             popoverContentToggle("状态入口", isOn: Binding(
                                 get: { configManager.config.popoverDisplaysWorkSessionStatus },
@@ -3149,7 +3149,7 @@ struct SettingsView: View {
                                 set: { configManager.config.popoverShowsClockOutAction = $0 }
                             ))
 
-                            popoverContentToggle("加班入口", isOn: Binding(
+                            popoverContentToggle("晚下班入口", isOn: Binding(
                                 get: { configManager.config.popoverDisplaysOvertimeAction },
                                 set: { configManager.config.popoverShowsOvertimeAction = $0 }
                             ))
@@ -3301,7 +3301,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 提前下班和加班统计按原始记录实时换算；提前下班算赚到的钱，加班默认无收入因此算亏损。
+    /// 提前下班和晚下班统计按原始记录实时换算；提前下班算赚到的钱，晚下班默认无收入因此算亏损。
     private var workSessionStatsSection: some View {
         let config = configManager.config
         let today = workSessionTracker.currentSummary(config: config)
@@ -3309,7 +3309,7 @@ struct SettingsView: View {
 
         return LazyVStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 12) {
-                Label("提前下班与加班", systemImage: "timer")
+                Label("提前下班与晚下班", systemImage: "timer")
                     .font(.headline)
 
                 Spacer()
@@ -3363,12 +3363,12 @@ struct SettingsView: View {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 4), alignment: .leading, spacing: 10) {
                 workSessionStatCard(title: "历史提前下班进账", value: formatMoney(total.clockOutAmount), tint: .green)
                 workSessionStatCard(title: "历史提前下班时长", value: formatOffTaskDuration(total.clockOutSeconds), tint: .green)
-                workSessionStatCard(title: "历史加班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
-                workSessionStatCard(title: "历史加班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
+                workSessionStatCard(title: "历史晚下班亏损", value: formatMoney(total.overtimeAmount), tint: .indigo)
+                workSessionStatCard(title: "历史晚下班时长", value: formatOffTaskDuration(total.overtimeSeconds), tint: .indigo)
             }
 
             if historyYears.isEmpty {
-                Text("暂无提前下班或加班记录")
+                Text("暂无提前下班或晚下班记录")
                     .font(.caption)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -3390,7 +3390,7 @@ struct SettingsView: View {
             Spacer()
 
             offTaskHistoryPill("提前下班 \(total.clockOutCount)次")
-            offTaskHistoryPill("加班 \(total.overtimeCount)次")
+            offTaskHistoryPill("晚下班 \(total.overtimeCount)次")
             offTaskHistoryPill("\(dayCount)天")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -3452,12 +3452,12 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 7) {
                 workSessionPeriodMetric(title: "提前下班进账", value: formatMoney(period.summary.clockOutAmount))
                 workSessionPeriodMetric(title: "提前下班时长", value: formatOffTaskDuration(period.summary.clockOutSeconds))
-                workSessionPeriodMetric(title: "加班亏损", value: formatMoney(period.summary.overtimeAmount))
-                workSessionPeriodMetric(title: "加班时长", value: formatOffTaskDuration(period.summary.overtimeSeconds))
+                workSessionPeriodMetric(title: "晚下班亏损", value: formatMoney(period.summary.overtimeAmount))
+                workSessionPeriodMetric(title: "晚下班时长", value: formatOffTaskDuration(period.summary.overtimeSeconds))
 
                 HStack(spacing: 8) {
                     offTaskHistoryPill("提前下班\(period.summary.clockOutCount)次")
-                    offTaskHistoryPill("加班\(period.summary.overtimeCount)次")
+                    offTaskHistoryPill("晚下班\(period.summary.overtimeCount)次")
                 }
             }
         }
@@ -3488,7 +3488,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 提前下班与加班历史同样按年、月、日折叠，避免累计数据和明细割裂。
+    /// 提前下班与晚下班历史同样按年、月、日折叠，避免累计数据和明细割裂。
     private func workSessionHistoryYears(from summaries: [WorkSessionRecordSummary]) -> [WorkSessionHistoryYear] {
         let grouped = Dictionary(grouping: summaries) { summary in
             offTaskYearKey(summary.workday)
@@ -3580,8 +3580,8 @@ struct SettingsView: View {
                 }
 
                 workSessionBatchDeleteButton(
-                    title: "删除\(year.title)提前下班/加班记录？",
-                    message: "将删除\(year.title)下全部 \(year.recordCount) 条提前下班/加班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
+                    title: "删除\(year.title)提前下班/晚下班记录？",
+                    message: "将删除\(year.title)下全部 \(year.recordCount) 条提前下班/晚下班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
                     summaries: yearSummaries
                 )
             }
@@ -3631,8 +3631,8 @@ struct SettingsView: View {
                 }
 
                 workSessionBatchDeleteButton(
-                    title: "删除\(month.title)提前下班/加班记录？",
-                    message: "将删除\(month.title)下全部 \(month.recordCount) 条提前下班/加班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
+                    title: "删除\(month.title)提前下班/晚下班记录？",
+                    message: "将删除\(month.title)下全部 \(month.recordCount) 条提前下班/晚下班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
                     summaries: monthSummaries
                 )
             }
@@ -3679,8 +3679,8 @@ struct SettingsView: View {
                 }
 
                 workSessionBatchDeleteButton(
-                    title: "删除\(day.title)提前下班/加班记录？",
-                    message: "将删除\(day.title)下全部 \(day.summaries.count) 条提前下班/加班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
+                    title: "删除\(day.title)提前下班/晚下班记录？",
+                    message: "将删除\(day.title)下全部 \(day.summaries.count) 条提前下班/晚下班记录；删除后无法恢复，对应金额和时长会立即从统计中移除。",
                     summaries: day.summaries
                 )
             }
@@ -3848,12 +3848,12 @@ struct SettingsView: View {
                     .foregroundColor(tint)
                     .frame(width: 18)
 
-                Text("手动新增提前下班 / 加班记录")
+                Text("手动新增提前下班 / 晚下班记录")
                     .font(.callout.weight(.semibold))
 
                 Spacer()
 
-                Text(workSessionManualKind == .clockOut ? "提前下班会自动使用当天应下班时间" : "加班从当天应下班时间开始计算")
+                Text(workSessionManualKind == .clockOut ? "提前下班会自动使用当天应下班时间" : "晚下班从当天应下班时间开始计算")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -3880,7 +3880,7 @@ struct SettingsView: View {
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 6) {
-                        Text("加班日期")
+                        Text("晚下班日期")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(.secondary)
 
@@ -3892,7 +3892,7 @@ struct SettingsView: View {
                     RecordDateInput(date: workSessionManualWorkdayBinding, upperBound: Date())
                 }
 
-                DurationMinutesInput(title: "加班时长", totalMinutes: $workSessionManualOvertimeMinutes)
+                DurationMinutesInput(title: "晚下班时长", totalMinutes: $workSessionManualOvertimeMinutes)
                 workSessionComputedBoundaryNote(config: config)
             }
 
@@ -3985,10 +3985,10 @@ struct SettingsView: View {
         case .overtime:
             let workday = calendar.startOfDay(for: workSessionManualStartDate)
             guard let window = SalaryWorkTimeline.workWindow(startingOn: workday, config: config, calendar: calendar) else {
-                return "所选日期没有有效工作窗口，无法推算加班开始时间。"
+                return "所选日期没有有效工作窗口，无法推算晚下班开始时间。"
             }
             let end = calendar.date(byAdding: .minute, value: max(0, workSessionManualOvertimeMinutes), to: window.end) ?? window.end
-            return "\(formatWorkSessionDate(window.workday)) 加班到 \(formatWorkSessionBoundary(end, workday: window.workday))。"
+            return "\(formatWorkSessionDate(window.workday)) 晚下班到 \(formatWorkSessionBoundary(end, workday: window.workday))。"
         }
     }
 
@@ -4949,7 +4949,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 dataTransferRow(
                     title: "数据",
-                    detail: "包含薪资数据、补贴、计薪规则、工作时间和所有摸鱼、提前下班、加班记录；",
+                    detail: "包含薪资数据、补贴、计薪规则、工作时间和所有摸鱼、提前下班、晚下班记录；",
                     exportTitle: "导出数据",
                     importTitle: "导入数据",
                     exportAction: exportAllData,
@@ -5104,7 +5104,7 @@ struct SettingsView: View {
 
             guard confirmImport(
                 title: "导入数据？",
-                message: "这会替换当前薪资数据、补贴、计薪规则、工作时间和所有摸鱼、提前下班、加班记录；展示、快捷键和应用偏好不会改变。"
+                message: "这会替换当前薪资数据、补贴、计薪规则、工作时间和所有摸鱼、提前下班、晚下班记录；展示、快捷键和应用偏好不会改变。"
             ) else { return }
 
             applyImportedSalaryData(document.salaryData)
@@ -5838,7 +5838,7 @@ struct SettingsView: View {
 
     private func workSessionStatusText(_ summary: WorkSessionDailySummary) -> String {
         if workSessionTracker.activeOvertimeSession(config: configManager.config) != nil {
-            return "加班中"
+            return "晚下班中"
         }
         if workSessionTracker.clockOutSession(for: summary.workday) != nil {
             return "已提前下班"
@@ -5852,7 +5852,7 @@ struct SettingsView: View {
         overtimeAvailability: OvertimeAvailability
     ) -> String {
         if let overtime = workSessionTracker.activeOvertimeSession(config: configManager.config) {
-            return "加班到 \(formatOffTaskClock(overtime.end))，今日加班亏损 \(formatMoney(summary.overtimeAmount))"
+            return "晚下班到 \(formatOffTaskClock(overtime.end))，今日晚下班亏损 \(formatMoney(summary.overtimeAmount))"
         }
         if let clockOut = workSessionTracker.clockOutSession(for: summary.workday) {
             return "提前 \(formatOffTaskClock(clockOut.start)) 下班，今日提前下班进账 \(formatMoney(summary.clockOutAmount))"
@@ -5863,7 +5863,7 @@ struct SettingsView: View {
         if overtimeAvailability.canStart {
             return overtimeAvailability.shortMessage
         }
-        return summary.hasRecords ? "今日已记录提前下班/加班数据" : "今日暂无提前下班/加班记录"
+        return summary.hasRecords ? "今日已记录提前下班/晚下班数据" : "今日暂无提前下班/晚下班记录"
     }
 
     private func offTaskStatusText(_ summary: OffTaskDailySummary) -> String {

@@ -34,11 +34,11 @@
 | 工作进度 | 按完整工作窗口推进，休息是否计薪不影响时间百分比 |
 | 摸鱼状态 | 用户在弹窗或快捷键手动切换，记录区间内有效计薪时间并折算为摸鱼薪资 |
 | 提前下班 | 用户可在工作窗口内提前下班，记录剩余有效计薪时间并折算为提前下班赚到的金额，可撤回 |
-| 加班 | 用户可在真实下班后选择加班时长，默认无额外收入，按当天秒薪折算加班亏损，可撤回 |
+| 晚下班 | 用户可在真实下班后选择晚下班时长，默认无额外收入，按当天秒薪折算晚下班亏损，可撤回 |
 | 计薪规则 | 每天、仅工作日、自定义工作日 |
 | 节假日 | 通过 `ChineseHolidays` 自动获取并缓存 |
 | 快捷键动作序列 | 一次快捷键按下执行序列中的下一项动作 |
-| 导入导出 | 数据文件包含薪资、补贴、计薪规则、工作时间、摸鱼、提前下班和加班记录，不含节假日缓存；配置文件包含展示、快捷键、颜色、刷新、应用偏好和设置侧边栏宽度 |
+| 导入导出 | 数据文件包含薪资、补贴、计薪规则、工作时间、摸鱼、提前下班和晚下班记录，不含节假日缓存；配置文件包含展示、快捷键、颜色、刷新、应用偏好和设置侧边栏宽度 |
 
 ## 模块关系
 
@@ -76,8 +76,8 @@ SettingsView
 |------|------|
 | `SalaryDance/Models/SalaryConfig.swift` | 配置字段、默认值、薪资换算、工作日判断、跨夜时间 |
 | `SalaryDance/Models/SalaryWorkTimeline.swift` | 展开真实工作窗口、有效计薪区间 |
-| `SalaryDance/Models/OffTaskTracker.swift` | 摸鱼区间、提前下班和加班记录持久化及当日/历史统计 |
-| `SalaryDance/ViewModels/SalaryViewModel.swift` | 定时刷新、今日收入、工作状态、进度、提前下班和加班状态 |
+| `SalaryDance/Models/OffTaskTracker.swift` | 摸鱼区间、提前下班和晚下班记录持久化及当日/历史统计 |
+| `SalaryDance/ViewModels/SalaryViewModel.swift` | 定时刷新、今日收入、工作状态、进度、提前下班和晚下班状态 |
 | `SalaryDance/Views/FloatingPanelView.swift` | 状态栏、弹窗定位、设置窗口 |
 | `SalaryDance/Views/SettingsView.swift` | 设置分栏、输入校验入口、展示配置 |
 | `SalaryDance/Views/SalaryDisplayView.swift` | 弹窗薪资和时间轴展示 |
@@ -90,7 +90,7 @@ SettingsView
 - `SalaryWorkTimeline` 是工作窗口和有效计薪区间的统一来源；实时收入、摸鱼统计和编辑校验都应复用它。
 - `SalaryCycleMode` 决定计薪周期归属，`MonthlySalaryCalculationMode` 只决定月薪与日薪互算分母，两者不能互相替代。
 - `OffTaskTracker` 持久化原始摸鱼区间，金额、时长和周期汇总按当前薪资配置实时重算。
-- `WorkSessionTracker` 持久化提前下班和加班原始记录；提前下班金额表示剩余计薪时长赚到的薪资，加班金额表示默认无收入时按当天秒薪折算的亏损。
+- `WorkSessionTracker` 持久化提前下班和晚下班原始记录；提前下班金额表示剩余计薪时长赚到的薪资，晚下班金额表示默认无收入时按当天秒薪折算的亏损。
 - 状态栏、弹窗、设置窗口和快捷键入口集中由 `StatusBarController` 串联，UI 展示开关由 `SalaryConfig` 驱动。
 
 ## 详细文档

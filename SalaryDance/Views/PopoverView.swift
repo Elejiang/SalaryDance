@@ -151,9 +151,9 @@ struct PopoverView: View {
             overtimeMinutes: $overtimeMinutes,
             clockOutHelp: clockOutSession == nil ? clockOutAvailability.helpMessage : "撤回今日提前下班记录。",
             overtimeHelp: latestOvertime == nil
-                ? (hasSelectedOvertimeDuration ? overtimeAvailability.helpMessage : "请先选择加班时长。")
-                : "撤回最近一条加班记录。",
-            endOvertimeHelp: "按当前时间结束本次加班并进入结算。",
+                ? (hasSelectedOvertimeDuration ? overtimeAvailability.helpMessage : "请先选择晚下班时长。")
+                : "撤回最近一条晚下班记录。",
+            endOvertimeHelp: "按当前时间结束本次晚下班并进入结算。",
             privacyAction: {
                 if statusBarController.isContentMasked {
                     statusBarController.revealContent()
@@ -192,12 +192,12 @@ struct PopoverView: View {
 
     private func workSessionTitle(clockOutSession: ClockOutSession?, activeOvertime: OvertimeSession?) -> String {
         if activeOvertime != nil {
-            return "加班中"
+            return "晚下班中"
         }
         if clockOutSession != nil {
             return "已提前下班"
         }
-        return "提前下班与加班"
+        return "提前下班与晚下班"
     }
 
     private func workSessionSubtitle(
@@ -228,7 +228,7 @@ struct PopoverView: View {
 
     private func workSessionSummaryText(_ summary: WorkSessionDailySummary) -> String? {
         if summary.overtimeSeconds > 0 {
-            return "今日已加班 \(formatOffTaskDuration(summary.overtimeSeconds))，按当前时薪折算多干 \(formatWorkSessionMoney(summary.overtimeAmount))。"
+            return "今日已晚下班 \(formatOffTaskDuration(summary.overtimeSeconds))，按当前时薪折算多干 \(formatWorkSessionMoney(summary.overtimeAmount))。"
         }
 
         if summary.clockOutSeconds > 0 {
@@ -490,7 +490,7 @@ struct PopoverView: View {
     }
 }
 
-/// 提前下班与加班弹窗面板只承载当下操作和一句反馈，完整数据放到设置页记录中。
+/// 提前下班与晚下班弹窗面板只承载当下操作和一句反馈，完整数据放到设置页记录中。
 struct WorkSessionActiveOvertimeSummary: Equatable {
     let plannedDuration: String
     let plannedDurationValue: Double
@@ -573,7 +573,7 @@ struct WorkSessionPopoverPanelView: View {
     private func activeOvertimeSummaryView(_ summary: WorkSessionActiveOvertimeSummary) -> some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 0) {
-                Text("预计加班 ")
+                Text("预计晚下班 ")
                 rollingSummaryText(summary.plannedDuration, value: summary.plannedDurationValue)
                 Text("，按当前时薪折算多干 ")
                 rollingSummaryText(summary.plannedAmount, value: summary.plannedAmountValue)
@@ -583,7 +583,7 @@ struct WorkSessionPopoverPanelView: View {
             .minimumScaleFactor(0.72)
 
             HStack(spacing: 0) {
-                Text("目前已加班 ")
+                Text("目前已晚下班 ")
                 rollingSummaryText(summary.elapsedDuration, value: summary.elapsedDurationValue)
                 Text("，多干 ")
                 rollingSummaryText(summary.elapsedAmount, value: summary.elapsedAmountValue)
@@ -683,7 +683,7 @@ struct WorkSessionPopoverPanelView: View {
                     .focusable(false)
                 } else if canUndoOvertime {
                     Button(action: overtimeAction) {
-                        Label("撤回加班", systemImage: "arrow.uturn.backward")
+                        Label("撤回晚下班", systemImage: "arrow.uturn.backward")
                             .font(.caption2.weight(.semibold))
                     }
                     .buttonStyle(.plain)
@@ -696,7 +696,7 @@ struct WorkSessionPopoverPanelView: View {
                     .focusable(false)
                 } else {
                     Button(action: overtimeAction) {
-                        Label("加班", systemImage: "plus.circle.fill")
+                        Label("晚下班", systemImage: "plus.circle.fill")
                             .font(.caption2.weight(.semibold))
                     }
                     .buttonStyle(.plain)
@@ -725,7 +725,7 @@ struct WorkSessionPopoverPanelView: View {
 
     private var durationRow: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("加班时长")
+            Text("晚下班时长")
                 .font(.caption2.weight(.semibold))
                 .foregroundColor(.secondary)
 

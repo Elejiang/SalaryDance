@@ -376,9 +376,9 @@ final class SalaryViewModel: ObservableObject {
         let h = remainingMinutes / 60
         let m = remainingMinutes % 60
         if h > 0 {
-            return "加班至 \(formatClock(overtime.end))，剩 \(h)时\(m)分"
+            return "晚下班至 \(formatClock(overtime.end))，剩 \(h)时\(m)分"
         }
-        return "加班至 \(formatClock(overtime.end))，剩 \(m)分钟"
+        return "晚下班至 \(formatClock(overtime.end))，剩 \(m)分钟"
     }
 
     private func formatClock(_ date: Date) -> String {

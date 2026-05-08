@@ -687,13 +687,13 @@ struct SalaryConfig: Codable, Equatable {
     var popoverShowsSalaryCycleOffTaskDuration: Bool = false
     /// 弹窗摸鱼卡片是否显示历史累计摸鱼时长。
     var popoverShowsHistoricalOffTaskDuration: Bool = false
-    /// 弹窗是否显示提前下班与加班面板标题和状态。
+    /// 弹窗是否显示提前下班与晚下班面板标题和状态。
     var popoverShowsWorkSessionStatus: Bool = false
-    /// 弹窗提前下班与加班面板是否显示今日提示文案。
+    /// 弹窗提前下班与晚下班面板是否显示今日提示文案。
     var popoverShowsTodayWorkSessionSummary: Bool = true
-    /// 弹窗提前下班与加班面板是否显示提前下班操作。
+    /// 弹窗提前下班与晚下班面板是否显示提前下班操作。
     var popoverShowsClockOutAction: Bool = true
-    /// 弹窗提前下班与加班面板是否显示加班操作。
+    /// 弹窗提前下班与晚下班面板是否显示晚下班操作。
     var popoverShowsOvertimeAction: Bool = true
     /// 点击状态栏入口时是否默认以脱敏模式打开弹窗。
     var statusItemClickShowsPrivatePopover: Bool = false
@@ -2131,7 +2131,7 @@ struct SalaryDataExportDocument: Codable {
     var offTaskSessions: [OffTaskSession]
     /// 用户产生的全部提前下班原始记录。
     var clockOutSessions: [ClockOutSession]
-    /// 用户产生的全部加班原始记录。
+    /// 用户产生的全部晚下班原始记录。
     var overtimeSessions: [OvertimeSession]
 
     private enum CodingKeys: String, CodingKey {
@@ -2183,7 +2183,7 @@ enum SalaryDataTransferError: LocalizedError {
         case .invalidOffTaskData(let message):
             return "摸鱼记录无效：\(message)。"
         case .invalidWorkSessionData(let message):
-            return "提前下班/加班记录无效：\(message)。"
+            return "提前下班/晚下班记录无效：\(message)。"
         }
     }
 }

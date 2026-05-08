@@ -355,7 +355,7 @@ struct SalaryDisplayView: View {
         case .clockedOutEarly:
             return ("已提前下班", viewModel.statusText.isEmpty ? "提前下班" : viewModel.statusText, "checkmark.circle.fill", .green)
         case .overtime:
-            return ("加班中", viewModel.statusText, "timer", .indigo)
+            return ("晚下班中", viewModel.statusText, "timer", .indigo)
         case .finished:
             return ("今日已收工", "已完成今日工作", "checkmark.circle.fill", .green)
         case .dayOff:

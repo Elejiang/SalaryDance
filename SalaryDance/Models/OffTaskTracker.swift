@@ -768,7 +768,7 @@ struct ClockOutSession: Codable, Equatable, Identifiable {
     }
 }
 
-/// 用户在真实下班后选择的一段加班时间，end 是用户计划的加班结束时间。
+/// 用户在真实下班后选择的一段晚下班时间，end 是用户计划的晚下班结束时间。
 struct OvertimeSession: Codable, Equatable, Identifiable {
     var id: UUID = UUID()
     var workday: Date
@@ -792,7 +792,7 @@ enum WorkSessionRecordKind: String, Codable, Equatable, Hashable, CaseIterable {
         case .clockOut:
             return "提前下班"
         case .overtime:
-            return "加班"
+            return "晚下班"
         }
     }
 }
@@ -815,8 +815,8 @@ struct WorkSessionRecordSummary: Equatable, Identifiable {
     let isActive: Bool
 }
 
-/// 单个工作日的提前下班和加班统计，金额按当前薪资配置实时重算。
-/// 提前下班金额表示提前下班仍赚到的薪资；加班金额表示默认无收入时按当天薪资折算的加班亏损。
+/// 单个工作日的提前下班和晚下班统计，金额按当前薪资配置实时重算。
+/// 提前下班金额表示提前下班仍赚到的薪资；晚下班金额表示默认无收入时按当天薪资折算的晚下班亏损。
 struct WorkSessionDailySummary: Equatable, Identifiable {
     var id: String { dayKey }
 
@@ -842,7 +842,7 @@ struct WorkSessionDailySummary: Equatable, Identifiable {
     }
 }
 
-/// 跨工作日聚合后的提前下班和加班统计。
+/// 跨工作日聚合后的提前下班和晚下班统计。
 struct WorkSessionAggregateSummary: Equatable {
     let clockOutSeconds: TimeInterval
     let clockOutAmount: Double
@@ -883,8 +883,8 @@ struct ClockOutAvailability: Equatable {
 
     static let alreadyOvertime = ClockOutAvailability(
         canClockOut: false,
-        shortMessage: "已加班",
-        helpMessage: "该工作日已有加班记录，不能再提前下班。"
+        shortMessage: "已晚下班",
+        helpMessage: "该工作日已有晚下班记录，不能再提前下班。"
     )
 }
 
@@ -895,36 +895,36 @@ struct OvertimeAvailability: Equatable {
 
     static let available = OvertimeAvailability(
         canStart: true,
-        shortMessage: "可加班",
-        helpMessage: "当前已到真实下班时间，可记录加班。"
+        shortMessage: "可晚下班",
+        helpMessage: "当前已到真实下班时间，可记录晚下班。"
     )
 
     static let beforeWorkFinished = OvertimeAvailability(
         canStart: false,
         shortMessage: "未到下班",
-        helpMessage: "真实下班后才可以记录加班。"
+        helpMessage: "真实下班后才可以记录晚下班。"
     )
 
     static let active = OvertimeAvailability(
         canStart: false,
-        shortMessage: "加班中",
-        helpMessage: "已有进行中的加班记录，可先撤回。"
+        shortMessage: "晚下班中",
+        helpMessage: "已有进行中的晚下班记录，可先撤回。"
     )
 
     static let alreadyClockedOut = OvertimeAvailability(
         canStart: false,
         shortMessage: "已提前下班",
-        helpMessage: "该工作日已有提前下班记录，不能再记录加班。"
+        helpMessage: "该工作日已有提前下班记录，不能再记录晚下班。"
     )
 
     static let alreadyRecorded = OvertimeAvailability(
         canStart: false,
-        shortMessage: "已记录加班",
-        helpMessage: "该工作日已有加班记录，可在记录页编辑或延长。"
+        shortMessage: "已记录晚下班",
+        helpMessage: "该工作日已有晚下班记录，可在记录页编辑或延长。"
     )
 }
 
-/// 负责持久化提前下班和加班记录，并把原始时间换算成统计时长与金额。
+/// 负责持久化提前下班和晚下班记录，并把原始时间换算成统计时长与金额。
 final class WorkSessionTracker: ObservableObject {
     static let shared = WorkSessionTracker()
 
@@ -1183,7 +1183,7 @@ final class WorkSessionTracker: ObservableObject {
         }
 
         if latestOvertimeSession(for: day, calendar: calendar) != nil {
-            return "该工作日已有加班记录，不能再记录提前下班"
+            return "该工作日已有晚下班记录，不能再记录提前下班"
         }
 
         return nil
@@ -1197,17 +1197,17 @@ final class WorkSessionTracker: ObservableObject {
         let day = calendar.startOfDay(for: workday)
         guard let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar),
               let end = calendar.date(byAdding: .minute, value: durationMinutes, to: window.end) else {
-            return "加班日期必须是有效工作日"
+            return "晚下班日期必须是有效工作日"
         }
 
         if clockOutSession(for: window.workday, calendar: calendar) != nil {
-            return "该工作日已有提前下班记录，不能再记录加班"
+            return "该工作日已有提前下班记录，不能再记录晚下班"
         }
 
         let existing = overtimeSessions(on: window.workday, excluding: id, calendar: calendar)
         if let latestEnd = existing.map(\.end).max(),
            end <= latestEnd {
-            return "该工作日已有不短于当前时长的加班记录"
+            return "该工作日已有不短于当前时长的晚下班记录"
         }
 
         return nil
@@ -1233,25 +1233,25 @@ final class WorkSessionTracker: ObservableObject {
         let day = calendar.startOfDay(for: workday)
 
         guard durationMinutes > 0 else {
-            return "加班时长必须大于 0"
+            return "晚下班时长必须大于 0"
         }
 
         guard let window = SalaryWorkTimeline.workWindow(startingOn: day, config: config, calendar: calendar) else {
-            return "加班日期必须是有效工作日"
+            return "晚下班日期必须是有效工作日"
         }
 
         guard let end = calendar.date(byAdding: .minute, value: durationMinutes, to: window.end),
               end > window.end else {
-            return "加班结束时间必须晚于当天应下班时间"
+            return "晚下班结束时间必须晚于当天应下班时间"
         }
 
         let isToday = calendar.isDate(window.workday, inSameDayAs: now)
         guard end <= now || isToday else {
-            return "只能提前预定当天加班"
+            return "只能提前预定当天晚下班"
         }
 
         guard overtimeEndsBeforeNextWorkWindow(end: end, after: window, config: config, calendar: calendar) else {
-            return "加班结束时间不能进入下一次上班窗口"
+            return "晚下班结束时间不能进入下一次上班窗口"
         }
 
         return nil
@@ -1495,7 +1495,7 @@ final class WorkSessionTracker: ObservableObject {
 
         for session in imported {
             guard session.end > session.start else {
-                throw SalaryDataTransferError.invalidWorkSessionData("存在结束时间不晚于开始时间的加班记录")
+                throw SalaryDataTransferError.invalidWorkSessionData("存在结束时间不晚于开始时间的晚下班记录")
             }
 
             var uniqueSession = OvertimeSession(
